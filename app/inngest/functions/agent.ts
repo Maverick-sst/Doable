@@ -7,9 +7,21 @@ import { callLLM } from "@/lib/llm";
 import { tools } from "@/lib/tools";
 import { executeTool } from "@/lib/tool-executor";
 import { ProjectContextSchema } from "@/lib/validations/context";
+import { ExecutionStatus, NodeStatus, NodeType } from "@prisma/client";
+import { handleFailure } from "@/lib/handleFailure";
 
 export const agentFunction = inngest.createFunction(
-    { id: "agent", retries: 3, triggers: [{ event: "chat/requested" }] },
+    {
+        id: "agent", retries: 3,
+        onFailure: async ({ event }) => {
+            const workflowId = event.data.event.data.workflowId;
+            const executionId = event.data.event.data.executionId;
+            const nodeId = event.data.event.data.nodeId;
+
+            await handleFailure(executionId, nodeId, workflowId);
+        }
+        , triggers: [{ event: "chat/requested" }]
+    },
     async ({ event, step }) => {
         // step-1 - fetch initial context to prepare for agent execution
         const contextData = await step.run("fetch_initial_context", async () => {
@@ -36,8 +48,7 @@ export const agentFunction = inngest.createFunction(
 
         // step-2 - agentic loop
         const result = await step.run("agent-loop", async () => {
-            const { userId } = event.data;
-
+            const { userId, executionId, nodeId } = event.data;
             const { projectId, files, messages, prompt } = contextData;
             let iterations = 0;
             const MAX_ITERATIONS = Number(process.env.MAX_ITERATIONS) || 12;
@@ -71,6 +82,33 @@ export const agentFunction = inngest.createFunction(
             //1. generate prompt -embeddings
             const promptEmbedding: number[] = await getEmbeddings(prompt);
 
+            const execuiton = await prisma.execution.update({
+                where: {
+                    id: executionId
+                },
+                data: {
+                    status: ExecutionStatus.RUNNING
+                }
+            })
+
+            const node = await prisma.node.update({
+                where: {
+                    id: nodeId
+                },
+                data: {
+                    status: NodeStatus.RUNNING
+                }
+            })
+
+            await prisma.runtimeEvent.createMany({
+                data: [
+
+                    { executionId: executionId, type: "execution.running", payload: { executionId: executionId } },
+                    { executionId: executionId, nodeId: nodeId, type: "node.running", payload: { nodeId: nodeId, type: NodeType.ARCHITECT } },
+
+                ]
+            })
+
             while (iterations < MAX_ITERATIONS) {
                 iterations++;
 
@@ -98,11 +136,11 @@ export const agentFunction = inngest.createFunction(
                 let toolResult = "";
                 if (tool_call.function.name === "mark_complete") {
                     const args = JSON.parse(tool_call.function.arguments);
-                    await executeTool("mark_complete", args, projectId, userId);
+                    await executeTool("mark_complete", args, projectId, userId, execuiton.id, node.id);
                     break;
                 } else {
                     const args = JSON.parse(tool_call.function.arguments);
-                    toolResult = await executeTool(tool_call.function.name, args, projectId, userId);
+                    toolResult = await executeTool(tool_call.function.name, args, projectId, userId, execuiton.id, node.id);
                 }
 
                 // add tool call result to toolHistory
@@ -112,7 +150,7 @@ export const agentFunction = inngest.createFunction(
                     tool_call_id: tool_call.id
                 })
 
-                const shortLog = toolResult.length > 100 ? toolResult.substring(0,100) + "..." : toolResult;
+                const shortLog = toolResult.length > 100 ? toolResult.substring(0, 100) + "..." : toolResult;
 
                 // update scratchpad / short-term memory 
                 await prisma.project.update({

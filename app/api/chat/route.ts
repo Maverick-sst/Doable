@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { CreatePromptSchema } from "@/lib/validations/prompt";
 import { NextResponse } from "next/server";
 import { inngest } from "@/app/inngest/client";
+import { Starter } from "@/lib/workflow-coordinator";
 
 
 export async function POST(request: Request) {
@@ -35,6 +36,8 @@ export async function POST(request: Request) {
                 content: prompt,
             }
         })
+
+        const { workflowId, executionId, nodeId } = await Starter(projectId, user.id, prompt);
         // fire inngest event here
         try {
             await inngest.send({
@@ -45,6 +48,9 @@ export async function POST(request: Request) {
                     prompt: message.content,
                     messageId: message.id,
                     userId: user.id,
+                    workflowId: workflowId,
+                    executionId: executionId,
+                    nodeId: nodeId
                 }
 
             });
@@ -52,7 +58,7 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Failed to send event to inngest" }, { status: 500 });
         }
 
-        return NextResponse.json({ projectId:projectId, messageId: message.id, message: message.content, status: "processing" });
+        return NextResponse.json({ projectId: projectId, messageId: message.id, message: message.content, status: "processing" });
 
 
     } catch (error) {
