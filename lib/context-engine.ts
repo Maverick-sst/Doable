@@ -1,11 +1,6 @@
 import { prisma } from "./prisma";
 import { LLmMessage, RelevantFile } from "./types";
 import { SYSTEM_PROMPT } from "./system-prompt";
-import {
-  defaultContext,
-  ProjectContext,
-  ProjectContextSchema,
-} from "./validations/context";
 
 export async function buildContext(
   projectId: string,
@@ -19,18 +14,22 @@ export async function buildContext(
     tool_calls?: unknown[];
     tool_call_id?: string;
   }> = [],
+  currentContext: {
+    currentTask: string,
+    iteration: number,
+    scratchpad: string[]
+  }
 ): Promise<LLmMessage[]> {
-  const shortTermResults = await prisma.project.findFirst({
+  const shortTermMem = await prisma.projectMemory.findFirst({
     where: { id: projectId },
-    select: { context: true },
+    select: {
+      domain: true,
+      requirements: true,
+      techStack: true,
+      summary: true
+    },
   });
 
-  const shortTermMem = ProjectContextSchema.safeParse(
-    shortTermResults?.context,
-  );
-  const currentContext: ProjectContext = shortTermMem.success
-    ? shortTermMem.data
-    : defaultContext;
 
   const promptEmbeddingString = `[${promptEmbedding.join(",")}]`;
 
@@ -49,8 +48,11 @@ export async function buildContext(
     {
       role: "user",
       content: `
+=== PROJECT DETAILS ===
+domain : ${shortTermMem?.domain}, techstack: ${shortTermMem?.techStack}, requirements: ${shortTermMem?.requirements}
+
 === PROJECT SUMMARY ===
-${currentContext.summary || "New project - starting fresh"}
+${shortTermMem?.summary || "New project - starting fresh"}
 
 === CURRENT TASK ===
 ${currentContext.currentTask || prompt}

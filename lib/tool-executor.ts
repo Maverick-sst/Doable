@@ -186,21 +186,12 @@ async function deleteFile(path: string, projectId: string): Promise<string> {
 }
 
 async function markComplete(summary: string, projectId: string, executionId: string, nodeId: string): Promise<string> {
-    await prisma.project.update({
+    await prisma.projectMemory.update({
         where: {
-            id: projectId
+            projectId: projectId
         },
         data: {
-            // update status, context column---> which is basically short term memory alogn with updatedAt
-            status: "IDLE",
-            context: {
-                // short term mem updation
-                summary: summary,
-                currentTask: "",
-                iteration: 0,
-                scratchpad: [],
-            } as Prisma.JsonObject,
-            updatedAt: new Date()
+            summary: summary
         }
     })
 
