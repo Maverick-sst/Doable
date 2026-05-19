@@ -1,36 +1,26 @@
 import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
-import { CreatePromptSchema } from "@/lib/validations/prompt";
 import { NextResponse } from "next/server";
 import { inngest } from "@/app/inngest/client";
 import { Starter } from "@/lib/workflow-coordinator";
 
 
-export async function POST(request: Request) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
     const { user, error } = await requireDbUser();
     if (error) return error;
 
-    let body: unknown;
+    const projectId = (await params).id;
+    const project = await prisma.project.findUnique({
+        where: { id: projectId, userId: user.id, status: { in: ['PENDING', 'IDLE'] } }
+    })
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 })
+    let body: { prompt: string };
     try {
         body = await request.json();
     } catch (error) {
         return NextResponse.json({ error: "Invalid Json Format" }, { status: 400 });
     }
-
-    const validationResult = CreatePromptSchema.safeParse(body);
-    if (!validationResult.success) {
-        return NextResponse.json({ error: validationResult.error.flatten() }, { status: 400 });
-    }
-
-    const { prompt, domain } = validationResult.data;
-    // const project = await prisma.project.findUnique({
-    //     where: { id: projectId, userId: user.id }
-    // })
-    // if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 })
-    if(!body.projectId){
-        // no projectId -----> create one
-        const response = await 
-    }
+    const { prompt } = body;
     try {
         const message = await prisma.message.create({
             data: {

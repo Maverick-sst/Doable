@@ -1,8 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { CreateProjectSchema } from "@/lib/validations/project";
 import { NextResponse } from "next/server";
 import { requireDbUser } from "@/lib/auth-user";
-import { Prisma } from "@prisma/client";
+import { CreatePromptSchema } from "@/lib/validations/prompt";
 
 export async function POST(request: Request) {
     const { user, error } = await requireDbUser();
@@ -15,35 +14,31 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Invalid Json Format" }, { status: 400 });
     }
 
-    const validationResult = CreateProjectSchema.safeParse(body);
+    const validationResult = CreatePromptSchema.safeParse(body);
     if (!validationResult.success) {
         return new Response(JSON.stringify(validationResult.error), { status: 400 });
     }
-    const { name, description, domain, techStack, requirements } = validationResult.data;
-
-
+    const { domain } = validationResult.data;
     try {
 
-        let project = { id: "", name: name, description: description || null };
+        let project = { id: ""};
         await prisma.$transaction(async (tx) => {
             project = await tx.project.create({
                 data: {
-                    name,
-                    description,
-                    userId: user.id
+                    name:"",
+                    userId: user.id,
+                    status: "DISCOVERY"
                 },
                 select: {
                     id: true,
-                    name: true,
-                    description: true
                 }
             })
             await tx.projectMemory.create({
                 data: {
                     projectId: project.id,
                     domain: domain,
-                    techStack: techStack,
-                    requirements: requirements,
+                    techStack: {},
+                    requirements: {},
                     summary: ""
                 }
             })
@@ -51,8 +46,6 @@ export async function POST(request: Request) {
         })
         return NextResponse.json({
             projectId: project.id,
-            name: project.name,
-            description: project.description,
             message: "Project created successfully",
         }, { status: 201 });
 
