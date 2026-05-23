@@ -1,7 +1,7 @@
 import { inngest } from "@/app/inngest/client";
 import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
-import { UpdateFileSchema } from "@/lib/validations/file";
+import { UpdateFileSchema } from "@/src/shared/validations/file";
 import { Prisma } from "@prisma/client";
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/client";
 import { NextResponse } from "next/server";

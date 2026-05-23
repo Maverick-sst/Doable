@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { CreateFileSchema } from "@/lib/validations/file";
+import { CreateFileSchema } from "@/src/shared/validations/file";
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { requireDbUser } from "@/lib/auth-user";

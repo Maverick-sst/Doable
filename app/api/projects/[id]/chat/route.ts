@@ -2,60 +2,85 @@ import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { inngest } from "@/app/inngest/client";
-import { Starter } from "@/lib/workflow-coordinator";
-
+import { startHCRWorkflow } from "@/src/runtime/workflows/hcr/start-hcr-workflow";
+import { MessagePhase, ProjectStatus } from "@prisma/client";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
     const { user, error } = await requireDbUser();
     if (error) return error;
 
     const projectId = (await params).id;
-    const project = await prisma.project.findUnique({
+    if (!projectId) {
+        return NextResponse.json({ error: "Missing project id" }, { status: 400 });
+    }
+
+    const project = await prisma.project.findFirst({
         where: { id: projectId, userId: user.id, status: { in: ['PENDING', 'IDLE'] } }
-    })
-    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 })
+    });
+    if (!project) {
+        return NextResponse.json({ error: "Project not found or not in a valid state" }, { status: 404 });
+    }
+
     let body: { prompt: string };
     try {
         body = await request.json();
-    } catch (error) {
-        return NextResponse.json({ error: "Invalid Json Format" }, { status: 400 });
+    } catch {
+        return NextResponse.json({ error: "Invalid JSON format" }, { status: 400 });
     }
+
     const { prompt } = body;
+    if (!prompt || typeof prompt !== "string") {
+        return NextResponse.json({ error: "prompt is required" }, { status: 400 });
+    }
+
     try {
+        // Create the message in BUILD phase
         const message = await prisma.message.create({
             data: {
-                projectId: projectId,
+                projectId,
                 role: "USER",
                 content: prompt,
+                phase: MessagePhase.BUILD,
             }
-        })
+        });
 
-        const { workflowId, executionId, nodeId } = await Starter(projectId, user.id, prompt);
-        // fire inngest event here
+        // Initialize the HCR workflow tracking state
+        const { workflowId, executionId, nodeId } = await startHCRWorkflow(projectId, user.id, prompt);
+
+        // Update project status to IN_PROGRESS
+        await prisma.project.update({
+            where: { id: projectId },
+            data: { status: ProjectStatus.IN_PROGRESS }
+        });
+
+        // Fire the inngest event to trigger background HCR execution
         try {
             await inngest.send({
-
                 name: "chat/requested",
                 data: {
-                    projectId: projectId,
+                    projectId,
                     prompt: message.content,
                     messageId: message.id,
                     userId: user.id,
-                    workflowId: workflowId,
-                    executionId: executionId,
-                    nodeId: nodeId
+                    workflowId,
+                    executionId,
+                    nodeId
                 }
-
             });
-        } catch (error) {
-            return NextResponse.json({ error: "Failed to send event to inngest" }, { status: 500 });
+        } catch (err) {
+            console.error("Inngest send error:", err);
+            return NextResponse.json({ error: "Failed to start workflow worker" }, { status: 500 });
         }
 
-        return NextResponse.json({ projectId: projectId, messageId: message.id, message: message.content, status: "processing" });
+        return NextResponse.json({
+            projectId,
+            messageId: message.id,
+            message: message.content,
+            status: "processing"
+        });
 
-
-    } catch (error) {
-        return NextResponse.json({ error: "Failed to save message to database" }, { status: 500 });
+    } catch (err) {
+        console.error("Chat handler error:", err);
+        return NextResponse.json({ error: "Failed to initialize chat runtime" }, { status: 500 });
     }
-
 }

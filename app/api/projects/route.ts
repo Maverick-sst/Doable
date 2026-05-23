@@ -1,91 +1,81 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { requireDbUser } from "@/lib/auth-user";
-import { CreatePromptSchema } from "@/lib/validations/prompt";
+import { ProjectDomainSchema } from "@/src/shared/validations/project-domain";
+import { ProjectStatus } from "@prisma/client";
+import { z } from "zod";
+
+const CreateProjectSchema = z.object({
+  domain: ProjectDomainSchema.shape.domain,
+});
 
 export async function POST(request: Request) {
-    const { user, error } = await requireDbUser();
-    if (error) return error;
+  const { user, error } = await requireDbUser();
+  if (error) return error;
 
-    let body: unknown;
-    try {
-        body = await request.json();
-    } catch (error) {
-        return NextResponse.json({ error: "Invalid Json Format" }, { status: 400 });
-    }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON format" }, { status: 400 });
+  }
 
-    const validationResult = CreatePromptSchema.safeParse(body);
-    if (!validationResult.success) {
-        return new Response(JSON.stringify(validationResult.error), { status: 400 });
-    }
-    const { domain } = validationResult.data;
-    try {
+  const validation = CreateProjectSchema.safeParse(body);
+  if (!validation.success) {
+    return NextResponse.json({ error: validation.error.flatten() }, { status: 400 });
+  }
 
-        let project = { id: ""};
-        await prisma.$transaction(async (tx) => {
-            project = await tx.project.create({
-                data: {
-                    name:"",
-                    userId: user.id,
-                    status: "DISCOVERY"
-                },
-                select: {
-                    id: true,
-                }
-            })
-            await tx.projectMemory.create({
-                data: {
-                    projectId: project.id,
-                    domain: domain,
-                    techStack: {},
-                    requirements: {},
-                    summary: ""
-                }
-            })
-            return project;
-        })
-        return NextResponse.json({
-            projectId: project.id,
-            message: "Project created successfully",
-        }, { status: 201 });
+  const { domain } = validation.data;
 
-    } catch (error) {
-        console.error("Project create error");
-        console.error(error);
-        if (error instanceof Error) {
-            return NextResponse.json({
-                error: error.message,
-                stack: process.env.NODE_ENV === "development" ? error.stack : undefined
-            }, { status: 500 });
-        }
+  try {
+    let projectId = "";
 
-        return NextResponse.json({ error: "Internal Server Error " }, { status: 500 });
-    }
+    await prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({
+        data: { name: "", userId: user.id, status: ProjectStatus.DISCOVERY },
+      });
+      projectId = project.id;
 
+      await tx.projectMemory.create({
+        data: {
+          projectId: project.id,
+          domain,
+          requirements: {},
+          techStack: {},
+          summary: "",
+        },
+      });
+    });
+
+    return NextResponse.json({ projectId, message: "Project created successfully" }, { status: 201 });
+  } catch (err) {
+    console.error("Project create error:", err);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
 }
 
 export async function GET() {
-    const { user, error } = await requireDbUser();
-    if (error) return error;
+  const { user, error } = await requireDbUser();
+  if (error) return error;
 
-    try {
-        const projects = await prisma.project.findMany({
-            where: {
-                user: {
-                    clerkId: user.clerkId
-                }
-            },
-            select: {
-                id: true,
-                name: true,
-                description: true,
-                createdAt: true,
-                status: true
-            }
-        })
-        return NextResponse.json({ projects: projects }, { status: 200 });
-    } catch (error) {
-        return NextResponse.json({ msg: "Internal Server Error" }, { status: 500 });
-    }
-
+  try {
+    const projects = await prisma.project.findMany({
+      where: {
+        user: {
+          clerkId: user.clerkId,
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        createdAt: true,
+        status: true,
+      },
+    });
+    return NextResponse.json({ projects }, { status: 200 });
+  } catch (error) {
+    console.error("Projects list error:", error);
+    return NextResponse.json({ msg: "Internal Server Error" }, { status: 500 });
+  }
 }

@@ -1,9 +1,9 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/app/inngest/client";
-import { agentFunction } from "@/app/inngest/functions/agent";
+import { hcrAgentFunction } from "@/app/inngest/functions/hcr-agent";
 import { embedFileFunction } from "@/app/inngest/functions/embedFile";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [agentFunction, embedFileFunction]
+  functions: [hcrAgentFunction, embedFileFunction],
 });
