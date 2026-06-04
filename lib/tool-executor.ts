@@ -195,7 +195,7 @@ async function markComplete(summary: string, projectId: string, executionId: str
         }
     })
 
-    await prisma.node.update({
+    const node = await prisma.node.update({
         where: {
             id: nodeId
         },
@@ -204,7 +204,7 @@ async function markComplete(summary: string, projectId: string, executionId: str
         }
     })
     await prisma.runtimeEvent.create({
-        data: { executionId: executionId, nodeId: nodeId, type: "node.completed", payload: { nodeId: nodeId, type: NodeType.ARCHITECT } },
+        data: { executionId: executionId, nodeId: nodeId, type: "node.completed", payload: { nodeId: nodeId, type: node.type } },
 
     })
     return `Project marked complete with summary.`;

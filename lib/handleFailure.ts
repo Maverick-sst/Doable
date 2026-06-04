@@ -34,7 +34,7 @@ export async function handleFailure( executionId: string, nodeId: string, workfl
             data: [
                 { executionId: execution.id, type: "workflow.failed", payload: { workflowId: workflow.id } },
                 { executionId: execution.id, type: "execution.failed", payload: { executionId: execution.id } },
-                { executionId: execution.id, nodeId: node.id, type: "node.failed", payload: { nodeId: node.id, type: NodeType.ARCHITECT } },
+                { executionId: execution.id, nodeId: node.id, type: "node.failed", payload: { nodeId: node.id, type: node.type } },
             ]
         })
     

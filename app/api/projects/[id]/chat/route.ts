@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { inngest } from "@/app/inngest/client";
 import { startHCRWorkflow } from "@/src/runtime/workflows/hcr/start-hcr-workflow";
-import { MessagePhase, ProjectStatus } from "@prisma/client";
+import { MessagePhase, ProjectStatus, NodeType } from "@prisma/client";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
     const { user, error } = await requireDbUser();
@@ -56,15 +56,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         // Fire the inngest event to trigger background HCR execution
         try {
             await inngest.send({
-                name: "chat/requested",
+                name: "node/execute",
                 data: {
                     projectId,
-                    prompt: message.content,
-                    messageId: message.id,
                     userId: user.id,
                     workflowId,
                     executionId,
-                    nodeId
+                    nodeId,
+                    nodeType: NodeType.ARCHITECT,
+                    prompt: message.content,
+                    inputArtifactId: null,
                 }
             });
         } catch (err) {
