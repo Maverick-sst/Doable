@@ -67,5 +67,4 @@ PHASE_4_PRD.pdf
 /scripts/*
 /app/test/*
 
-/app/inngest/functions/hcr-agent.ts
-src/*
+
