@@ -216,7 +216,7 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
       });
 
       const response = await callLLM(request, tools);
-      const message = response.choices[0]?.message;
+      const message = response.choices?.[0]?.message;
       if (!message) break;
 
       toolHistory.push({
@@ -227,49 +227,51 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
 
       if (!message.tool_calls || message.tool_calls.length === 0) break;
 
-      const tool_call = message.tool_calls[0];
+      let shouldBreak = false;
 
-      await prisma.runtimeEvent.create({
-        data: {
-          executionId,
-          nodeId,
-          type: "tool.called",
-          payload: {
-            tool: tool_call.function.name,
-            args: JSON.parse(tool_call.function.arguments),
-            iteration: iterations,
+      for (const tool_call of message.tool_calls) {
+        await prisma.runtimeEvent.create({
+          data: {
+            executionId,
+            nodeId,
+            type: "tool.called",
+            payload: {
+              tool: tool_call.function.name,
+              args: JSON.parse(tool_call.function.arguments),
+              iteration: iterations,
+            },
           },
-        },
-      });
+        });
 
-      if (tool_call.function.name === "mark_complete") {
+        if (tool_call.function.name === "mark_complete") {
+          const args = JSON.parse(tool_call.function.arguments);
+          await executeTool("mark_complete", args, projectId, userId, executionId, nodeId);
+          await handleToolCompletion(executionId, nodeId, {
+            tool: "mark_complete",
+            result: "completed",
+            iteration: iterations,
+          });
+          toolHistory.push({ role: "tool", content: "completed", tool_call_id: tool_call.id });
+          shouldBreak = true;
+          continue;
+        }
+
         const args = JSON.parse(tool_call.function.arguments);
-        await executeTool("mark_complete", args, projectId, userId, executionId, nodeId);
+        const toolResult = await executeTool(tool_call.function.name, args, projectId, userId, executionId, nodeId);
+
+        toolHistory.push({ role: "tool", content: toolResult, tool_call_id: tool_call.id });
+
+        const shortLog = toolResult.length > 100 ? toolResult.substring(0, 100) + "..." : toolResult;
         await handleToolCompletion(executionId, nodeId, {
-          tool: "mark_complete",
-          result: "completed",
+          tool: tool_call.function.name,
+          result: shortLog,
           iteration: iterations,
         });
-        break;
+
+        currentContext.scratchpad.push(`[${iterations}]: ${tool_call.function.name}() -> ${shortLog}`);
       }
 
-      const args = JSON.parse(tool_call.function.arguments);
-      const toolResult = await executeTool(tool_call.function.name, args, projectId, userId, executionId, nodeId);
-
-      toolHistory.push({ role: "tool", content: toolResult, tool_call_id: tool_call.id });
-
-      const shortLog = toolResult.length > 100 ? toolResult.substring(0, 100) + "..." : toolResult;
-      await handleToolCompletion(executionId, nodeId, {
-        tool: tool_call.function.name,
-        result: shortLog,
-        iteration: iterations,
-      });
-
-      currentContext = {
-        currentTask: prompt,
-        iteration: iterations,
-        scratchpad: [...currentContext.scratchpad, `[${iterations}]: ${tool_call.function.name}() -> ${shortLog}`],
-      };
+      if (shouldBreak) break;
     }
 
     // Verify node completed status and trigger completed event

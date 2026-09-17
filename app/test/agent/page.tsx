@@ -39,6 +39,41 @@ interface StatusDetails {
   } | null;
 }
 
+interface HcrNode {
+  id: string;
+  type: string;
+  status: string;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface HcrArtifact {
+  id: string;
+  type: string;
+  version: number;
+  producedBy: string;
+  createdAt: string;
+  content: any;
+  metadata: any;
+}
+
+interface HcrEvent {
+  id: string;
+  type: string;
+  payload: any;
+  createdAt: string;
+  nodeId: string | null;
+}
+
+interface HcrState {
+  workflow: { id: string; type: string; status: string } | null;
+  execution: { id: string; status: string; createdAt: string } | null;
+  nodes: HcrNode[];
+  artifacts: HcrArtifact[];
+  events: HcrEvent[];
+}
+
 export default function Phase4TestDashboard() {
   // Navigation & Project selection
   const [projectId, setProjectId] = useState("");
@@ -57,6 +92,10 @@ export default function Phase4TestDashboard() {
   // HCR chat
   const [hcrPrompt, setHcrPrompt] = useState("");
   const [isHcrLoading, setIsHcrLoading] = useState(false);
+
+  // HCR Inspection Console
+  const [hcrState, setHcrState] = useState<HcrState | null>(null);
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
 
   // File Preview
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
@@ -116,8 +155,9 @@ export default function Phase4TestDashboard() {
       setSelectedFileId(null);
       setSelectedFileContent("");
 
-      // Trigger status check
+      // Trigger status check & HCR fetch
       await handleRefreshStatus(idToLoad);
+      await fetchHcrState();
     } catch (err: any) {
       setErrorMsg(err.message);
       addLog(`Error: ${err.message}`);
@@ -146,17 +186,31 @@ export default function Phase4TestDashboard() {
   useEffect(() => {
     if (!projectId) return;
 
-    // Set up polling interval
+    // Set up polling interval (7.5s for performance)
     const interval = setInterval(() => {
       handleRefreshStatus();
-      // Also refresh file tree occasionally if running to capture updates
+      // Also refresh file tree and HCR state occasionally if running to capture updates
       if (project?.status === "IN_PROGRESS") {
         fetchFileTreeOnly();
+        fetchHcrState();
       }
-    }, 2500);
+    }, 7500);
 
     return () => clearInterval(interval);
   }, [projectId, project?.status]);
+
+  const fetchHcrState = async () => {
+    if (!projectId) return;
+    try {
+      const res = await fetch(`/api/projects/${projectId}/hcr`);
+      const data = await res.json();
+      if (res.ok && data) {
+        setHcrState(data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const fetchFileTreeOnly = async () => {
     if (!projectId) return;
@@ -576,6 +630,131 @@ export default function Phase4TestDashboard() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* ROW 2: HCR Inspection Console */}
+      <div className="mt-6 border-t-2 border-indigo-900/50 pt-6">
+        <h2 className="text-xl font-extrabold text-white mb-4 flex items-center gap-2">
+          <span className="w-4 h-4 bg-purple-500 rounded-sm inline-block"></span>
+          HCR Inspection Console & Artifact Dashboard
+        </h2>
+        
+        {hcrState ? (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Panel A: Workflow Summary & Cognitive Progress */}
+            <div className="lg:col-span-3 space-y-4 flex flex-col">
+              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2 mb-3">Workflow Summary</h3>
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between"><span className="text-slate-400">Workflow ID:</span><span className="font-mono text-slate-200 truncate ml-2 max-w-[150px]">{hcrState.workflow?.id || "-"}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Status:</span><span className="font-bold text-indigo-400">{hcrState.workflow?.status || "-"}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Nodes Executed:</span><span className="font-bold text-slate-200">{hcrState.nodes.length}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Artifacts Created:</span><span className="font-bold text-slate-200">{hcrState.artifacts.length}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Runtime Events:</span><span className="font-bold text-slate-200">{hcrState.events.length}</span></div>
+                </div>
+              </div>
+
+              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2 mb-3">Cognitive Progress</h3>
+                <div className="space-y-3 pl-2 border-l-2 border-slate-700 ml-2 mt-2">
+                  {["DISCOVERY", "ARCHITECT", "RESEARCH", "PRD_REVIEWER", "PLANNER", "FRONTEND_ENG", "BACKEND_ENG"].map((step, idx) => {
+                     const isDone = hcrState.nodes.some(n => n.type === step && n.status === "COMPLETED");
+                     const isRunning = hcrState.nodes.some(n => n.type === step && n.status === "RUNNING");
+                     return (
+                       <div key={idx} className="relative">
+                         <div className={`absolute -left-[13px] top-1 w-2 h-2 rounded-full ${isDone ? 'bg-green-500' : isRunning ? 'bg-yellow-500 animate-pulse' : 'bg-slate-600'}`}></div>
+                         <span className={`text-xs font-mono font-semibold ${isDone ? 'text-green-400' : isRunning ? 'text-yellow-400' : 'text-slate-500'}`}>{step}</span>
+                       </div>
+                     )
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Panel B: Node Timeline & Events */}
+            <div className="lg:col-span-4 space-y-4 flex flex-col">
+              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col">
+                <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2 mb-3 sticky top-0 bg-slate-800">Node Timeline</h3>
+                {hcrState.nodes.length === 0 ? <p className="text-xs text-slate-500 italic">No nodes yet.</p> : (
+                  <div className="space-y-2">
+                    {hcrState.nodes.map(node => (
+                      <div key={node.id} className="bg-slate-900 p-2 rounded border border-slate-700 text-[10px] flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                           <span className={`w-1.5 h-1.5 rounded-full ${node.status === 'COMPLETED' ? 'bg-green-500' : node.status === 'FAILED' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></span>
+                           <span className="font-bold text-slate-200">{node.type}</span>
+                        </div>
+                        <span className="text-slate-500 font-mono">{new Date(node.updatedAt || node.createdAt).toLocaleTimeString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col">
+                <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2 mb-3 sticky top-0 bg-slate-800">Runtime Event Stream</h3>
+                {hcrState.events.length === 0 ? <p className="text-xs text-slate-500 italic">No events yet.</p> : (
+                  <div className="space-y-1.5 font-mono text-[9px]">
+                    {hcrState.events.map(ev => (
+                      <div key={ev.id} className="flex gap-2">
+                        <span className="text-slate-500 shrink-0">{new Date(ev.createdAt).toLocaleTimeString()}</span>
+                        <span className={`font-semibold ${ev.type.includes('failed') ? 'text-red-400' : ev.type.includes('completed') ? 'text-green-400' : 'text-indigo-300'}`}>{ev.type}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Panel C: Artifact Pipeline & Inspector */}
+            <div className="lg:col-span-5 space-y-4 flex flex-col">
+              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2 mb-3">Artifact Pipeline</h3>
+                {hcrState.artifacts.length === 0 ? <p className="text-xs text-slate-500 italic">No artifacts generated yet.</p> : (
+                  <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                    {hcrState.artifacts.map(art => (
+                      <button 
+                        key={art.id} 
+                        onClick={() => setSelectedArtifactId(art.id)}
+                        className={`shrink-0 p-2 border rounded-md text-left transition min-w-[140px] max-w-[180px] ${selectedArtifactId === art.id ? 'bg-indigo-900 border-indigo-500' : 'bg-slate-900 border-slate-700 hover:bg-slate-800'}`}
+                      >
+                        <div className="text-[10px] text-slate-400 mb-0.5 font-mono">v{art.version} • {new Date(art.createdAt).toLocaleTimeString()}</div>
+                        <div className="text-xs font-bold text-slate-200 truncate" title={art.type}>{art.type}</div>
+                        <div className="text-[10px] text-indigo-400 mt-1 truncate">by {art.producedBy}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 flex flex-col">
+                <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2 mb-3">Artifact Inspector</h3>
+                {selectedArtifactId ? (() => {
+                  const art = hcrState.artifacts.find(a => a.id === selectedArtifactId);
+                  if (!art) return <p className="text-xs text-slate-500">Artifact not found.</p>;
+                  return (
+                    <div className="flex flex-col">
+                      <div className="grid grid-cols-2 gap-2 text-[10px] mb-3 bg-slate-900 p-2 rounded border border-slate-700">
+                        <div><span className="text-slate-500">ID:</span> <span className="font-mono text-slate-300">{art.id}</span></div>
+                        <div><span className="text-slate-500">Type:</span> <span className="font-mono text-slate-300">{art.type}</span></div>
+                      </div>
+                      <div className="bg-slate-950 p-3 rounded font-mono text-[10px] text-emerald-400 overflow-auto max-h-[500px] border border-slate-900 relative">
+                        <pre className="whitespace-pre-wrap">{JSON.stringify(art.content, null, 2)}</pre>
+                      </div>
+                    </div>
+                  );
+                })() : (
+                  <div className="h-32 flex items-center justify-center border border-dashed border-slate-700 rounded bg-slate-900/50">
+                    <p className="text-xs text-slate-500 italic">Select an artifact above to inspect its JSON content.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-slate-800 p-8 rounded-lg border border-slate-700 text-center text-slate-400 italic text-sm">
+            HCR State not loaded. Trigger a workflow or wait for the 7.5s poll...
+          </div>
+        )}
       </div>
 
       {/* FOOTER Console Logs */}

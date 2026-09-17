@@ -13,6 +13,8 @@ export async function callDiscoveryAgent(
   prompt: string,
   history: { role: string; content: string }[]
 ): Promise<DiscoveryAgentResponse> {
+
+  console.log("---------------1.Entering the discovery-agent func-----------")
   const systemPrompt = `
 You are a requirement discovery agent for Doable, an AI software engineering platform.
 Domain: ${domain}
@@ -64,13 +66,17 @@ NEVER explain yourself. NEVER start building. NEVER use tools. ONLY output JSON.
     { role: "user", content: prompt },
   ];
 
+  console.log("----------------2.calling llm-----------------")
   const response = await callLLM(messages, []);
   const rawContent = response.choices[0].message.content;
-
+  console.log(`---------------${rawContent}--------------`);
+  
   try {
+    console.log("------------------4.parsing to begin------------");
     return JSON.parse(rawContent) as DiscoveryAgentResponse;
-  } catch {
+  } catch(error){
     // LLM returned non-JSON — treat as a follow-up question
+    console.log(`${error}----->error while parsing the content------------`);
     return { message: rawContent, discoveryComplete: false };
   }
 }

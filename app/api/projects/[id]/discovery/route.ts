@@ -7,6 +7,7 @@ import { MessagePhase, NodeStatus, ExecutionStatus, WorkflowStatus } from "@pris
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const requestId = crypto.randomUUID();
   const { user, error } = await requireDbUser();
   if (error) return error;
 
@@ -14,8 +15,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!projectId) {
     return NextResponse.json({ error: "Missing project id" }, { status: 400 });
   }
-
+  console.log(`[DISCOVERY: ===== REQUEST START =====`);
+  console.log(`[DISCOVERY: projectId=${projectId}`);
   // Find project and its memory scoped to user
+
+  console.log(`[DISCOVERY:${requestId}] PROJECT: querying`, { projectId });
+
   const project = await prisma.project.findFirst({
     where: {
       id: projectId,
@@ -30,10 +35,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Project or project memory not found" }, { status: 404 });
   }
 
+  console.log(`[DISCOVERY:${requestId}] BODY: parsing request`);
   let body: { prompt: string };
   try {
     body = await request.json();
-  } catch {
+    console.log(`[DISCOVERY:${requestId}] BODY: parsed successfully`, {
+    hasPrompt: !!body?.prompt,
+    promptLength: body?.prompt?.length,
+  });
+  } catch(err){
+    console.error(`[DISCOVERY:${requestId}] BODY: JSON PARSE FAILED`, err);
     return NextResponse.json({ error: "Invalid JSON format" }, { status: 400 });
   }
 
@@ -57,6 +68,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     },
   });
 
+  console.log(`[DISCOVERY:${requestId}] AGENT: calling discovery agent`);
   // Call discovery agent
   const agentResponse = await callDiscoveryAgent(
     project.memory.domain,
@@ -64,6 +76,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     history
   );
 
+  console.log(`[DISCOVERY:${requestId}] AGENT: returned`, {
+  discoveryComplete: agentResponse.discoveryComplete,
+  messageLength: agentResponse.message?.length,
+});
   // Start Discovery workflow state tracking (for analytics/events)
   const { workflowId, executionId, nodeId } = await startDiscoveryWorkflow(projectId);
 
