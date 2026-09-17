@@ -22,6 +22,9 @@ export interface DoableIdentity {
   /** Doable project.id (Postgres Project). */
   projectId: string;
 
+  /** Doable user.id (Postgres User). */
+  userId: string;
+
   /** Optional stable task/activity identifier for fine-grained correlation. */
   taskId?: string;
 }
