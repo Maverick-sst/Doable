@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "temporal:worker": "bun src/temporal/worker.ts",
+    "temporal:hello": "bun scripts/temporal-hello.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.0.12",
@@ -14,6 +16,10 @@
     "@openrouter/sdk": "^0.12.21",
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.7.0",
+    "@temporalio/activity": "^1.24.0",
+    "@temporalio/client": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0",
     "inngest": "^4.2.4",
     "next": "16.2.3",
     "react": "19.2.4",

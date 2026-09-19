@@ -3,7 +3,9 @@ export async function getEmbeddings(text: string): Promise<number[]> {
     const response = await fetch("https://openrouter.ai/api/v1/embeddings", {
         method: "POST",
         headers: {
-            "authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+            "X-Title": "Doable",
             "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -11,7 +13,7 @@ export async function getEmbeddings(text: string): Promise<number[]> {
             input: text,
             dimensions: 768
         })
-    })
+    });
     if (!response.ok) {
         throw new Error(`Embedding API failed: ${response.status}`);
     }

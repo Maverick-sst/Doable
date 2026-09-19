@@ -26,6 +26,9 @@ function pretty(value: unknown) {
 export default function DashboardPage() {
   const [projectName, setProjectName] = useState('Demo Project')
   const [projectDescription, setProjectDescription] = useState('Temporary testing project')
+  const [domain, setDomain] = useState('FULL_STACK_APPLICATION')
+  const [techStack, setTechStack] = useState('')
+  const [requirements, setRequirements] = useState('')
   const [projectId, setProjectId] = useState('')
 
   const [fileId, setFileId] = useState('')
@@ -87,6 +90,9 @@ export default function DashboardPage() {
     const result = await callApi('Create Project', 'POST', '/api/projects', {
       name: projectName,
       description: projectDescription,
+      domain,
+      techStack,
+      requirements
     })
     if (result && typeof result === 'object' && 'projectId' in result && typeof result.projectId === 'string') {
       setProjectId(result.projectId)
@@ -156,9 +162,59 @@ export default function DashboardPage() {
               className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
               value={projectDescription}
               onChange={(e) => setProjectDescription(e.target.value)}
-              rows={3}
+              rows={2}
               placeholder="Project description"
             />
+            
+            <div className="rounded border border-zinc-200 p-3 dark:border-zinc-800 space-y-3">
+              <div>
+                <label className="block text-sm font-medium mb-2 text-zinc-700 dark:text-zinc-300">Domain</label>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="domain"
+                      value="FULL_STACK_APPLICATION"
+                      checked={domain === "FULL_STACK_APPLICATION"}
+                      onChange={(e) => setDomain(e.target.value)}
+                      className="w-4 h-4 text-blue-600 border-zinc-300 focus:ring-blue-500"
+                    />
+                    <span className="text-sm">FULL_STACK_APPLICATION</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="domain"
+                      value="LANDING_PAGE"
+                      checked={domain === "LANDING_PAGE"}
+                      onChange={(e) => setDomain(e.target.value)}
+                      className="w-4 h-4 text-blue-600 border-zinc-300 focus:ring-blue-500"
+                    />
+                    <span className="text-sm">LANDING_PAGE</span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <input
+                  className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+                  value={techStack}
+                  onChange={(e) => setTechStack(e.target.value)}
+                  placeholder="Tech Stack (e.g. React, Node.js, PostgreSQL...)"
+                />
+              </div>
+
+              <div>
+                <textarea
+                  className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+                  value={requirements}
+                  onChange={(e) => setRequirements(e.target.value)}
+                  rows={3}
+                  placeholder="Requirements: Detail the specific features, constraints, or business logic..."
+                />
+              </div>
+            </div>
+
             <input
               className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
               value={projectId}
