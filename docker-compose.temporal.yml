@@ -1,6 +1,6 @@
 # Slim local Temporal development stack (Postgres only, no Elasticsearch)
 # Usage: docker compose -f docker-compose.temporal.yml up -d
-# Web UI: http://localhost:8233
+# Web UI (temporal-ui service): http://localhost:8080
 # gRPC endpoint: localhost:7233
 
 services:
@@ -34,18 +34,51 @@ services:
       - POSTGRES_USER=temporal
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=temporal-postgresql
-      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
-      - TEMPORAL_ADDRESS=0.0.0.0:7233
+      # NOTE: the image only ships config/dynamicconfig/docker.yaml.
+      # Pointing this at development-sql.yaml without mounting a
+      # ./dynamicconfig volume crashes the server on startup
+      # ("no such file or directory", exit 1).
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/docker.yaml
+      - TEMPORAL_ADDRESS=temporal-server:7233
+      - TEMPORAL_CLI_ADDRESS=temporal-server:7233
     ports:
       - "7233:7233"
-      - "8233:8233"
     networks:
       - temporal-network
     healthcheck:
-      test: ["CMD-SHELL", "tctl --address localhost:7233 namespace list || true"]
+      test: ["CMD-SHELL", "tctl --address temporal-server:7233 namespace list"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 30s
+
+  temporal-ui:
+    image: temporalio/ui:2.21.3
+    container_name: temporal-ui
+    depends_on:
+      temporal-server:
+        condition: service_started
+    environment:
+      - TEMPORAL_ADDRESS=temporal-server:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8080
+    ports:
+      - "8080:8080"
+    networks:
+      - temporal-network
+
+  temporal-admin-tools:
+    image: temporalio/admin-tools:1.22.3
+    container_name: temporal-admin-tools
+    depends_on:
+      temporal-server:
+        condition: service_started
+    environment:
+      - TEMPORAL_ADDRESS=temporal-server:7233
+      - TEMPORAL_CLI_ADDRESS=temporal-server:7233
+    networks:
+      - temporal-network
+    stdin_open: true
+    tty: true
 
 volumes:
   temporal-postgresql-data:

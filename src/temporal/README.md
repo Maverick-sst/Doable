@@ -24,7 +24,7 @@ docker compose -f docker-compose.temporal.yml ps
 
 Services:
 - Temporal gRPC endpoint: `localhost:7233`
-- Temporal Web UI: http://localhost:8233
+- Temporal Web UI: http://localhost:8080 (`temporal-ui` service)
 - Namespace: `default`
 
 ### 2. Configure environment
