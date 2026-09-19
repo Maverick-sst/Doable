@@ -1,0 +1,55 @@
+# Slim local Temporal development stack (Postgres only, no Elasticsearch)
+# Usage: docker compose -f docker-compose.temporal.yml up -d
+# Web UI: http://localhost:8233
+# gRPC endpoint: localhost:7233
+
+services:
+  temporal-postgresql:
+    image: postgres:15-alpine
+    container_name: temporal-postgresql
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-postgresql-data:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"
+    networks:
+      - temporal-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  temporal-server:
+    image: temporalio/auto-setup:1.22.3
+    container_name: temporal-server
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - TEMPORAL_ADDRESS=0.0.0.0:7233
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+    networks:
+      - temporal-network
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address localhost:7233 namespace list || true"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  temporal-postgresql-data:
+
+networks:
+  temporal-network:
+    driver: bridge
