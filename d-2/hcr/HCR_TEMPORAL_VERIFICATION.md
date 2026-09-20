@@ -46,7 +46,19 @@ schema change, no UI change. Only narrow testability hook + tests + this doc.
   identical registry config, `emitCompletionEvent:false` skips only the send;
   workflow returns artifact correlation. `bun test` covers contract/registry
   parity (9 pass). Live run NOT executed.
-- Classification: unresolved design decision (runtime evidence pending).
+- Observed (runtime 2026-09-20, owner-executed): **PASS.** Temporal run
+  `a78e195b-d8fa-4527-8919-5b2b491be980` (`hcr-cmu9x8vfx002xx2z1ya8sdw1b`,
+  prompt "build with approved scope") completed `WorkflowExecutionCompleted`
+  in 17 events: `validateHcrContext` attempt 1 (~2.3s) → `runArchitectNode`
+  attempt 1 (~40s) → artifact `cmu9x9t0y0002s3z1en37mkf7`
+  (`ARCHITECTURE_SPEC`, `nodeMigrated:true`). Full trace archived at
+  `d-2/hcr/temporal_ui_events/a78e195b-d8fa-4527-8919-5b2b491be980_events.json`.
+  Timeouts/retries match design (`30s×3` / `300s×3`). Prior failed attempt on
+  the same chain (stale worker `MODEL` env, since fixed by worker restart)
+  doubles as S4 partial evidence — confirm its `workflow.failed` reason via
+  `GET hcr` to close S4.
+- Classification: pass with evidence (runtime); S4 partial, pending reason
+  confirmation.
 - Owner command:
   ```
   docker compose -f docker-compose.temporal.yml up -d
@@ -140,7 +152,16 @@ schema change, no UI change. Only narrow testability hook + tests + this doc.
   `workflowId=hcr-<executionId>`, run ID from `wf.workflowInfo()`, Doable
   `workflowId/executionId/nodeId`, `artifactId`, `artifactType`,
   `runtimeEvent` IDs. No secrets/tokens/prompts logged by harness.
-- No live IDs to record (no executions triggered in this task).
+- Live IDs recorded 2026-09-20 (S1 runtime PASS): Temporal workflow
+  `hcr-cmu9x8vfx002xx2z1ya8sdw1b`, run
+  `a78e195b-d8fa-4527-8919-5b2b491be980`, Doable project
+  `cmu9x6q8x002dx2z1fjcwzomt` / workflow `cmu9x8v7d002wx2z179dkbmjm` /
+  execution `cmu9x8vfx002xx2z1ya8sdw1b` / node `cmu9x8voi002yx2z1b2e17yoa` /
+  artifact `cmu9x9t0y0002s3z1en37mkf7` (`ARCHITECTURE_SPEC`). Trace:
+  `d-2/hcr/temporal_ui_events/a78e195b-d8fa-4527-8919-5b2b491be980_events.json`.
+  Standing follow-up: confirm this execution has no `RESEARCH` node (no
+  Inngest fan-out) and capture the prior stale-`MODEL` run's
+  `workflow.failed` reason to close S4.
 
 ## 5. Mismatches
 
@@ -155,9 +176,10 @@ schema change, no UI change. Only narrow testability hook + tests + this doc.
   (`handleFailure` is Inngest-`onFailure`-only). Class: implementation gap.
   Severity: medium; failed Temporal runs leave execution RUNNING with no
   `workflow.failed` row until compensated.
-- M4 — Runtime evidence entirely pending (S1–S6 live runs). Class: test
-  harness issue (owner-reserved validation). Severity: gate-blocking by rule
-  ("no parity from compilation alone").
+- M4 — Runtime evidence partially recorded (S1 live PASS 2026-09-20, trace
+  archived; S4 partial via stale-`MODEL` failure). Class: test
+  harness issue (owner-reserved validation). Severity: still gate-blocking
+  for S2/S3/S5/S6 by rule ("no parity from compilation alone").
 
 ## 6. Required fixes before the next migration (ordered)
 

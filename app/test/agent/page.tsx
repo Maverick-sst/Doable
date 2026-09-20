@@ -93,6 +93,25 @@ export default function Phase4TestDashboard() {
   const [hcrPrompt, setHcrPrompt] = useState("");
   const [isHcrLoading, setIsHcrLoading] = useState(false);
 
+  // Temporal HCR check (side-by-side with Inngest)
+  const [temporalPrompt, setTemporalPrompt] = useState("");
+  const [isTemporalLoading, setIsTemporalLoading] = useState(false);
+  const [temporalResult, setTemporalResult] = useState<{
+    temporalWorkflowId: string;
+    temporalRunId: string;
+    doableWorkflowId: string;
+    doableExecutionId: string;
+    doableNodeId: string;
+    messageId: string;
+  } | null>(null);
+  const [lastApiCall, setLastApiCall] = useState<{
+    label: string;
+    method: string;
+    url: string;
+    status: number;
+    body: string;
+  } | null>(null);
+
   // HCR Inspection Console
   const [hcrState, setHcrState] = useState<HcrState | null>(null);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
@@ -312,6 +331,116 @@ export default function Phase4TestDashboard() {
     } finally {
       setIsHcrLoading(false);
     }
+  };
+
+  // 5b. Safe response reader — never throws on empty / HTML error pages.
+  // Every Temporal-panel call goes through this so failures show HTTP status
+  // + raw body instead of "Unexpected end of JSON input".
+  const readApiResponse = async (res: Response) => {
+    const raw = await res.text();
+    let json: any = null;
+    try {
+      json = raw ? JSON.parse(raw) : null;
+    } catch {
+      json = null; // non-JSON body (HTML 404, proxy redirect, empty 503...)
+    }
+    return { status: res.status, ok: res.ok, raw, json };
+  };
+
+  const recordApiCall = (label: string, method: string, url: string, status: number, body: string) => {
+    const shown = body.length > 3000 ? body.slice(0, 3000) + `\n… (${body.length} chars total)` : body;
+    setLastApiCall({ label, method, url, status, body: shown });
+  };
+
+  const extractError = (parsed: { status: number; raw: string; json: any }, fallback: string) => {
+    if (parsed.json) {
+      const err = parsed.json.error;
+      const msg = typeof err === "string" ? err : err ? JSON.stringify(err) : null;
+      if (msg) return `HTTP ${parsed.status}: ${msg}`;
+    }
+    if (parsed.raw.trim()) return `HTTP ${parsed.status}: ${parsed.raw.slice(0, 300)}`;
+    return `HTTP ${parsed.status}: ${fallback} (empty response body)`;
+  };
+
+  // 5c. Trigger HCR via Inngest (existing production path: POST /chat)
+  const handleSendHcrInngest = async () => {
+    const prompt = temporalPrompt.trim();
+    if (!prompt || !projectId) {
+      setErrorMsg(!projectId ? "Load a project first" : "Enter a prompt for the side-by-side run");
+      return;
+    }
+    setIsHcrLoading(true);
+    setErrorMsg("");
+    const url = `/api/projects/${projectId}/chat`;
+    addLog(`[Inngest] POST ${url} ...`);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      const parsed = await readApiResponse(res);
+      recordApiCall("Inngest HCR trigger", "POST", url, parsed.status, parsed.raw || "(empty body)");
+      if (!parsed.ok) throw new Error(extractError(parsed, "HCR run initiation failed"));
+      addLog(`[Inngest] started. messageId=${parsed.json?.messageId} status=${parsed.json?.status}`);
+      await handleLoadProject(projectId);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      addLog(`[Inngest] Error: ${err.message}`);
+    } finally {
+      setIsHcrLoading(false);
+    }
+  };
+
+  // 5d. Trigger HCR via Temporal (migration slice: POST /api/temporal/hcr)
+  const handleSendHcrTemporal = async () => {
+    const prompt = temporalPrompt.trim();
+    if (!prompt || !projectId) {
+      setErrorMsg(!projectId ? "Load a project first" : "Enter a prompt for the side-by-side run");
+      return;
+    }
+    setIsTemporalLoading(true);
+    setErrorMsg("");
+    // inputArtifactId omitted → ARCHITECT resolves latest DISCOVERY_REQUIREMENT.
+    const url = `/api/temporal/hcr`;
+    addLog(`[Temporal] POST ${url} ...`);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, prompt }),
+      });
+      const parsed = await readApiResponse(res);
+      recordApiCall("Temporal HCR trigger", "POST", url, parsed.status, parsed.raw || "(empty body)");
+      if (!parsed.ok) throw new Error(extractError(parsed, "Temporal HCR trigger failed"));
+      setTemporalResult({
+        temporalWorkflowId: parsed.json.temporalWorkflowId,
+        temporalRunId: parsed.json.temporalRunId,
+        doableWorkflowId: parsed.json.doableWorkflowId,
+        doableExecutionId: parsed.json.doableExecutionId,
+        doableNodeId: parsed.json.doableNodeId,
+        messageId: parsed.json.messageId,
+      });
+      addLog(`[Temporal] started. temporalWorkflowId=${parsed.json.temporalWorkflowId}`);
+      await handleLoadProject(projectId);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      addLog(`[Temporal] Error: ${err.message}`);
+    } finally {
+      setIsTemporalLoading(false);
+    }
+  };
+
+  // 5e. Manual HCR state poll (same data as the auto-poll, on demand)
+  const handlePollHcrNow = async () => {
+    if (!projectId) {
+      setErrorMsg("Load a project first");
+      return;
+    }
+    addLog(`Polling HCR state...`);
+    await handleRefreshStatus(projectId);
+    await fetchHcrState();
+    addLog(`HCR state refreshed.`);
   };
 
   // 6. View File Content
@@ -627,6 +756,98 @@ export default function Phase4TestDashboard() {
               </div>
             ) : (
               <p className="text-slate-500 text-sm italic">Load project to see generated components.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ROW 1b: Temporal HCR side-by-side check */}
+      <div className="mt-6 border-t-2 border-teal-900/50 pt-6">
+        <h2 className="text-xl font-extrabold text-white mb-1 flex items-center gap-2">
+          <span className="w-4 h-4 bg-teal-500 rounded-sm inline-block"></span>
+          Temporal HCR Check — side-by-side with Inngest
+        </h2>
+        <p className="text-slate-400 text-xs mb-4">
+          Same project + same prompt, two orchestrators. Inngest (<span className="font-mono">POST /chat</span>) is the untouched production path; Temporal (<span className="font-mono">POST /api/temporal/hcr</span>) is the migration slice. Requires Temporal up (<span className="font-mono">docker compose -f docker-compose.temporal.yml up -d</span> + <span className="font-mono">bun run temporal:worker</span>).
+        </p>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Controls */}
+          <div className="lg:col-span-5 bg-slate-800 p-5 rounded-lg border border-slate-700 space-y-4">
+            <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2">Trigger</h3>
+            <div className="text-xs bg-slate-900 border border-slate-800 rounded p-3 space-y-1">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Project</span>
+                <span className="font-mono text-slate-200 truncate ml-2 max-w-[220px]">{projectId || "(none — load in §1)"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Project status</span>
+                <span className="font-mono font-bold text-indigo-400 uppercase">{project?.status || "-"}</span>
+              </div>
+              <div className="text-slate-500 text-[11px] pt-1">
+                Needs <span className="font-mono text-slate-300">PENDING</span> or <span className="font-mono text-slate-300">IDLE</span> + finished discovery (DISCOVERY_REQUIREMENT artifact). Run discovery in §3 until complete.
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1 uppercase">Shared HCR prompt</label>
+              <input
+                type="text"
+                value={temporalPrompt}
+                onChange={(e) => setTemporalPrompt(e.target.value)}
+                placeholder="e.g. Build the approved scope with clean architecture"
+                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={handleSendHcrInngest}
+                disabled={isHcrLoading || !temporalPrompt.trim() || !projectId}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded text-xs font-semibold disabled:opacity-50 min-w-[150px]"
+              >
+                {isHcrLoading ? "…" : "Trigger via Inngest"}
+              </button>
+              <button
+                onClick={handleSendHcrTemporal}
+                disabled={isTemporalLoading || !temporalPrompt.trim() || !projectId}
+                className="flex-1 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded text-xs font-semibold disabled:opacity-50 min-w-[150px]"
+              >
+                {isTemporalLoading ? "…" : "Trigger via Temporal"}
+              </button>
+              <button
+                onClick={handlePollHcrNow}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded text-xs transition"
+              >
+                Refresh HCR state
+              </button>
+            </div>
+            {temporalResult && (
+              <div className="text-xs bg-slate-900 border border-teal-900 rounded p-3 space-y-1 font-mono">
+                <div className="text-teal-300 font-bold font-sans text-xs mb-1">Last Temporal trigger</div>
+                {Object.entries(temporalResult).map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-2">
+                    <span className="text-slate-400">{k}:</span>
+                    <span className="text-slate-200 truncate max-w-[230px]" title={v}>{v}</span>
+                  </div>
+                ))}
+                <div className="text-slate-500 text-[11px] pt-1 font-sans">Watch it in Temporal UI: http://localhost:8080 (workflow {temporalResult.temporalWorkflowId})</div>
+              </div>
+            )}
+          </div>
+
+          {/* Response inspector */}
+          <div className="lg:col-span-7 bg-slate-800 p-5 rounded-lg border border-slate-700 space-y-3">
+            <h3 className="text-sm font-bold text-white border-b border-slate-700 pb-2">Last API call inspector</h3>
+            {lastApiCall ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-bold text-slate-200">{lastApiCall.label}</span>
+                  <span className="font-mono text-slate-400">{lastApiCall.method} {lastApiCall.url}</span>
+                  <span className={`px-1.5 py-0.5 rounded font-bold ${lastApiCall.status >= 200 && lastApiCall.status < 300 ? "bg-green-950 text-green-400" : "bg-red-950 text-red-400"}`}>HTTP {lastApiCall.status}</span>
+                </div>
+                <pre className="bg-slate-950 p-3 rounded font-mono text-[10px] text-slate-300 overflow-auto max-h-[320px] whitespace-pre-wrap border border-slate-900">{lastApiCall.body}</pre>
+              </div>
+            ) : (
+              <p className="text-slate-500 text-sm italic">No calls yet. Triggers above record full status + raw body here — including non-JSON error pages that used to crash with “Unexpected end of JSON input”.</p>
             )}
           </div>
         </div>
