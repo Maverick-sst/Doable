@@ -9,6 +9,13 @@ declare module "bun:test" {
     toBe(expected: unknown): void;
     toEqual(expected: unknown): void;
     toBeDefined(): void;
+    toBeNull(): void;
+    toBeGreaterThan(expected: number): void;
+    toContain(expected: unknown): void;
+    not: {
+      toBe(expected: unknown): void;
+      toBeNull(): void;
+    };
   }
   export function expect(actual: unknown): Matchers;
 }

@@ -1,4 +1,5 @@
 import type { DoableIdentity } from "./types";
+import type { ArtifactType, NodeType } from "@prisma/client";
 
 /**
  * HCR orchestration boundary contract.
@@ -28,6 +29,8 @@ export interface ValidatedHcrContext {
   doableWorkflowId: string;
   doableExecutionId: string;
   doableNodeId: string;
+  /** Node type of the referenced row — seeds the generic execution loop. */
+  nodeType: NodeType;
   executionStatus: string;
   nodeStatus: string;
 }
@@ -50,10 +53,17 @@ export interface TemporalHcrResult {
   executionStatus: string;
   nodeMigrated: boolean;
   temporalWorkflowId: string;
-  /** Set once the real ARCHITECT node runs (null only for skeleton boundary). */
+  /** Last node result (final node once the full graph runs). */
   artifactId?: string | null;
   artifactType?: string | null;
   nodeType?: string;
+  /** Full-graph trace: one entry per executed node, in execution order. */
+  nodesCompleted?: string[];
+  artifacts?: Array<{
+    nodeType: string;
+    artifactId: string | null;
+    artifactType: string | null;
+  }>;
 }
 
 /**
@@ -119,4 +129,63 @@ export interface MarkHcrFailedActivityResult {
   doableNodeId: string;
   /** True when this call transitioned rows to FAILED; false if already FAILED. */
   markedFailed: boolean;
+}
+
+/** Input to the generic HCR node Activity (full-graph wrap). */
+export interface RunHcrNodeActivityInput {
+  identity: DoableIdentity;
+  /** Which registry node to execute — verified against the stored row. */
+  nodeType: NodeType;
+  prompt: string;
+  inputArtifactId?: string | null;
+}
+
+/** Result of the generic HCR node Activity. */
+export interface HcrNodeActivityResult {
+  doableProjectId: string;
+  doableWorkflowId: string;
+  doableExecutionId: string;
+  doableNodeId: string;
+  nodeType: NodeType;
+  artifactId: string | null;
+  /** Null for file-mutation nodes (FRONTEND_ENG / BACKEND_ENG). */
+  artifactType: ArtifactType | null;
+  nodeMigrated: true;
+}
+
+/** A node spawned by the coordinator port, ready to execute. */
+export interface SpawnedHcrNode {
+  nodeId: string;
+  nodeType: NodeType;
+  inputArtifactId: string | null;
+}
+
+/** Input to the coordinator-port Activity (mirrors `node/completed` handling). */
+export interface CreateNextHcrNodesInput {
+  /** Identity of the just-completed node. */
+  identity: DoableIdentity;
+  prompt: string;
+  outputArtifactId: string | null;
+  outputArtifactType: ArtifactType | null;
+}
+
+/** Coordinator decision for one completed node. */
+export interface CreateNextHcrNodesResult {
+  /** `spawn` → run `nextNodes`; `finalize` → run finalize activity once;
+   *  `wait` → a parallel peer is still running (unreachable in the joined
+   *  full-graph loop; kept for Inngest semantic parity). */
+  action: "spawn" | "finalize" | "wait";
+  nextNodes: SpawnedHcrNode[];
+}
+
+/** Input to the finalize-port Activity (mirrors `finalizeWorkflow`). */
+export interface FinalizeHcrSliceInput {
+  identity: DoableIdentity;
+}
+
+/** Result of the finalize-port Activity. */
+export interface FinalizeHcrSliceResult {
+  doableExecutionId: string;
+  /** True when this call transitioned rows to COMPLETED; false if already. */
+  finalized: boolean;
 }

@@ -102,6 +102,13 @@ do not "fix forward" inside this branch.
   artifact, project left `IN_PROGRESS` (parity with Inngest).
 - Pilot + Inngest reference path unaffected.
 
+Full-graph extension (`phase/hcr-full-graph`, same trigger): one trigger →
+`ARCHITECTURE_SPEC → RESEARCH_DOSSIER → APPROVED_PRD → EXECUTION_PLAN` (one
+version each) → FE/BE file mutations → `project IDLE`; exactly one artifact
+per `nodeId`; no `node/completed` Inngest fan-out for the execution (no
+duplicate nodes beyond the Temporal-created ones); workflow result lists
+`nodesCompleted` + per-node `artifacts`.
+
 ## 5. Rollback (any doubt → do this, in order)
 
 1. Stop calling `POST /api/temporal/hcr`. Production `/chat` never changed,
@@ -118,8 +125,15 @@ do not "fix forward" inside this branch.
 
 ## 6. Full-migration plan (after ARCHITECT passes §4)
 
-One adapter branch per node, same pattern (wrap, don't rewrite; suppress the
-Inngest send; prove idempotency; extend verification):
+> Addendum (`phase/hcr-full-graph`): per-node code branches were consolidated
+> into one `src/temporal/**`-only branch because every node shares the
+> identical wrap pattern (zero cognition changes — the Agent 03 suppression
+> flag covers all modes). Implemented: generic `runHcrNodeActivity`
+> (`runArchitectNode` now delegates, behavior unchanged), coordinator port
+> (`createNextHcrNodes` + guarded `finalizeHcrSlice`), workflow loop over
+> `HCR_TRANSITION_MAP` with FE/BE `Promise.all` fan-out and single finalize
+> call, `POST /api/temporal/hcr` unchanged. Per-node verification continues
+> checkpoint-by-checkpoint in the final run below; Inngest diff remains zero.
 
 1. `RESEARCH` (+ `RESEARCH_DOSSIER`), 2. `PRD_REVIEWER`, 3. `PLANNER`
    (staff-engineer), 4. `FRONTEND_ENG` + `BACKEND_ENG` together (tool-call

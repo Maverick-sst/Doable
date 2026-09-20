@@ -86,3 +86,70 @@ describe("ARCHITECT cognition parity (orchestration moved, intelligence kept)", 
     ).toEqual([NodeType.FRONTEND_ENG, NodeType.BACKEND_ENG]);
   });
 });
+
+describe("Full-graph wrap parity (generic activity + coordinator port)", () => {
+  test("every registry node carries a complete contract", () => {
+    const expected: NodeType[] = [
+      NodeType.ARCHITECT,
+      NodeType.RESEARCH,
+      NodeType.PRD_REVIEWER,
+      NodeType.PLANNER,
+      NodeType.FRONTEND_ENG,
+      NodeType.BACKEND_ENG,
+    ];
+    for (const nodeType of expected) {
+      const config = AGENT_REGISTRY[nodeType];
+      expect(config).toBeDefined();
+      expect(config?.nodeType).toBe(nodeType);
+      expect(config?.consumedArtifactTypes.length).toBeGreaterThan(0);
+      if (config?.outputMode === "structured_json") {
+        expect(config.usesFileTools).toBe(false);
+        expect(config.outputArtifactType).not.toBeNull();
+      } else {
+        expect(config?.usesFileTools).toBe(true);
+        expect(config?.outputArtifactType).toBeNull();
+      }
+    }
+  });
+
+  test("structured chain links ARCHITECT to EXECUTION_PLAN without gaps", () => {
+    const chain: Array<[ArtifactType, NodeType]> = [
+      [ArtifactType.ARCHITECTURE_SPEC, NodeType.RESEARCH],
+      [ArtifactType.RESEARCH_DOSSIER, NodeType.PRD_REVIEWER],
+      [ArtifactType.APPROVED_PRD, NodeType.PLANNER],
+    ];
+    for (const [artifact, next] of chain) {
+      expect(HCR_TRANSITION_MAP[artifact]?.nextNodes).toEqual([next]);
+    }
+    // Producer-consumer continuity: each node's input is the previous output.
+    expect(
+      AGENT_REGISTRY[NodeType.RESEARCH]?.consumedArtifactTypes,
+    ).toEqual([ArtifactType.ARCHITECTURE_SPEC]);
+    expect(
+      AGENT_REGISTRY[NodeType.PRD_REVIEWER]?.consumedArtifactTypes,
+    ).toEqual([ArtifactType.RESEARCH_DOSSIER]);
+    expect(
+      AGENT_REGISTRY[NodeType.PLANNER]?.consumedArtifactTypes,
+    ).toEqual([ArtifactType.APPROVED_PRD]);
+    expect(
+      AGENT_REGISTRY[NodeType.FRONTEND_ENG]?.consumedArtifactTypes,
+    ).toEqual([ArtifactType.EXECUTION_PLAN]);
+    expect(
+      AGENT_REGISTRY[NodeType.BACKEND_ENG]?.consumedArtifactTypes,
+    ).toEqual([ArtifactType.EXECUTION_PLAN]);
+  });
+
+  test("terminal nodes produce no artifact type (finalize path)", () => {
+    // FE/BE send outputArtifactType:null, which the coordinator port maps to
+    // the wait/finalize branch — no transition-map entry must exist for null.
+    expect(
+      HCR_TRANSITION_MAP[ArtifactType.EXECUTION_PLAN]?.nextNodes,
+    ).toContain(NodeType.FRONTEND_ENG);
+    expect(
+      AGENT_REGISTRY[NodeType.FRONTEND_ENG]?.maxIterations,
+    ).toBe(20);
+    expect(
+      AGENT_REGISTRY[NodeType.BACKEND_ENG]?.maxIterations,
+    ).toBe(20);
+  });
+});

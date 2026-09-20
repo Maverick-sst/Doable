@@ -8,12 +8,19 @@ import {
 import { prisma } from "@/lib/prisma";
 import { AGENT_REGISTRY } from "@/src/cognition/agent-registry";
 import { executeNode } from "@/src/cognition/node-executor";
+import { HCR_TRANSITION_MAP } from "@/src/runtime/workflows/hcr/transition-map";
 import type {
   TemporalHcrActivityInput,
   ValidatedHcrContext,
   HcrNodeBoundaryResult,
   RunArchitectNodeActivityInput,
   ArchitectNodeActivityResult,
+  RunHcrNodeActivityInput,
+  HcrNodeActivityResult,
+  CreateNextHcrNodesInput,
+  CreateNextHcrNodesResult,
+  FinalizeHcrSliceInput,
+  FinalizeHcrSliceResult,
   MarkHcrFailedActivityInput,
   MarkHcrFailedActivityResult,
 } from "../contracts/hcr";
@@ -47,7 +54,10 @@ export async function validateHcrContext(
       where: { id: executionId },
       include: {
         workflow: { include: { project: { select: { id: true, userId: true } } } },
-        nodes: { where: { id: nodeId }, select: { id: true, status: true } },
+        nodes: {
+          where: { id: nodeId },
+          select: { id: true, status: true, type: true },
+        },
       },
     });
   } catch (error) {
@@ -93,6 +103,7 @@ export async function validateHcrContext(
     doableWorkflowId: workflowId,
     doableExecutionId: executionId,
     doableNodeId: node.id,
+    nodeType: node.type,
     executionStatus: execution.status,
     nodeStatus: node.status,
   };
@@ -171,11 +182,51 @@ export async function runHcrNodeBoundary(
 export async function runArchitectNode(
   input: RunArchitectNodeActivityInput,
 ): Promise<ArchitectNodeActivityResult> {
-  const { identity, prompt, inputArtifactId } = input;
+  // Thin delegate preserved for backward compatibility (Agent 03 contract).
+  // All node types share one implementation below; ARCHITECT behavior is
+  // unchanged — the S1 runtime trace stays valid.
+  const result = await runHcrNodeActivity({
+    identity: input.identity,
+    nodeType: NodeType.ARCHITECT,
+    prompt: input.prompt,
+    inputArtifactId: input.inputArtifactId ?? null,
+  });
+
+  return {
+    doableProjectId: result.doableProjectId,
+    doableWorkflowId: result.doableWorkflowId,
+    doableExecutionId: result.doableExecutionId,
+    doableNodeId: result.doableNodeId,
+    nodeType: result.nodeType,
+    artifactId: result.artifactId,
+    artifactType: result.artifactType,
+    nodeMigrated: true as const,
+  };
+}
+
+/**
+ * Generic HCR node adapter behind the Temporal Activity boundary.
+ *
+ * Same wrap-don't-rewrite contract as the original ARCHITECT adapter: the
+ * existing `executeNode` + `AGENT_REGISTRY` entry own all cognition, Temporal
+ * owns sequencing/timeout/retry/recovery/correlation. Covers structured_json
+ * nodes (RESEARCH, PRD_REVIEWER, PLANNER) and tool_calls nodes
+ * (FRONTEND_ENG, BACKEND_ENG) uniformly — `executeNode` already branches on
+ * `outputMode`, so no per-node code is needed.
+ *
+ * Inngest suppression, retry safety (artifact reuse by `nodeId`), and failure
+ * classification behave exactly as documented on `runArchitectNode`.
+ * Known parked caveats (HCR_KNOWN_CAVEATS.md): C2 duplicate events on retry,
+ * C5 file-write idempotency for FE/BE.
+ */
+export async function runHcrNodeActivity(
+  input: RunHcrNodeActivityInput,
+): Promise<HcrNodeActivityResult> {
+  const { identity, nodeType, prompt, inputArtifactId } = input;
 
   if (!prompt || typeof prompt !== "string") {
     throw ApplicationFailure.nonRetryable(
-      "ARCHITECT activity requires the original user prompt",
+      `HCR ${nodeType} activity requires the original user prompt`,
       "HcrMissingPrompt",
     );
   }
@@ -192,17 +243,17 @@ export async function runArchitectNode(
     );
   }
 
-  if (storedNode.type !== NodeType.ARCHITECT) {
+  if (storedNode.type !== nodeType) {
     throw ApplicationFailure.nonRetryable(
-      `Node ${identity.nodeId} is ${storedNode.type}, not ARCHITECT`,
+      `Node ${identity.nodeId} is ${storedNode.type}, not ${nodeType}`,
       "HcrWrongNodeType",
     );
   }
 
-  const nodeConfig = AGENT_REGISTRY[NodeType.ARCHITECT];
+  const nodeConfig = AGENT_REGISTRY[nodeType];
   if (!nodeConfig) {
     throw ApplicationFailure.nonRetryable(
-      "ARCHITECT config missing from AGENT_REGISTRY",
+      `${nodeType} config missing from AGENT_REGISTRY`,
       "HcrMissingNodeConfig",
     );
   }
@@ -238,6 +289,117 @@ export async function runArchitectNode(
     artifactType: nodeConfig.outputArtifactType,
     nodeMigrated: true as const,
   };
+}
+
+/**
+ * Coordinator port: decides the next step after one node completes.
+ *
+ * Mirrors `app/inngest/functions/workflow-coordinator.ts` decision-for-decision
+ * (`HCR_TRANSITION_MAP` lookup, parallel wait-for-peer guard, terminal
+ * finalize) but performs NO Inngest sends — it returns the decision and lets
+ * the workflow drive the next Activities. Creates next `Node(CREATED)` rows +
+ * `node.created` events exactly like the coordinator.
+ *
+ * Parity note: like the Inngest coordinator, spawned-node creation carries no
+ * dedup key (parked caveat C3). The Inngest coordinator is untouched.
+ */
+export async function createNextHcrNodes(
+  input: CreateNextHcrNodesInput,
+): Promise<CreateNextHcrNodesResult> {
+  const { identity, outputArtifactId, outputArtifactType } = input;
+  const { executionId } = identity;
+
+  const transition = outputArtifactType
+    ? HCR_TRANSITION_MAP[outputArtifactType]
+    : null;
+
+  if (!transition) {
+    if (outputArtifactType === null) {
+      const runningNodes = await prisma.node.count({
+        where: {
+          executionId,
+          status: { in: [NodeStatus.CREATED, NodeStatus.RUNNING] },
+        },
+      });
+      if (runningNodes > 0) return { action: "wait", nextNodes: [] };
+    }
+    return { action: "finalize", nextNodes: [] };
+  }
+
+  const nextNodes = [];
+  for (const nodeType of transition.nextNodes) {
+    const node = await prisma.node.create({
+      data: {
+        executionId,
+        type: nodeType,
+        status: NodeStatus.CREATED,
+        order: transition.order,
+      },
+    });
+
+    await prisma.runtimeEvent.create({
+      data: {
+        executionId,
+        nodeId: node.id,
+        type: "node.created",
+        payload: { nodeId: node.id, type: nodeType, nodeType },
+      },
+    });
+
+    nextNodes.push({
+      nodeId: node.id,
+      nodeType,
+      inputArtifactId: outputArtifactId,
+    });
+  }
+
+  return { action: "spawn", nextNodes };
+}
+
+/**
+ * Finalize port: mirrors `finalizeWorkflow` (execution/workflow COMPLETED,
+ * project IDLE, `execution.completed` + `workflow.completed` events).
+ *
+ * Unlike the Inngest original, writes are conditional (transition-guarded) so
+ * a retried or twice-reached finalize marks COMPLETED exactly once without
+ * duplicating completion events. The Inngest path is untouched.
+ */
+export async function finalizeHcrSlice(
+  input: FinalizeHcrSliceInput,
+): Promise<FinalizeHcrSliceResult> {
+  const { identity } = input;
+  const { workflowId, executionId, projectId } = identity;
+
+  const finalized = await prisma.$transaction(async (tx) => {
+    const finalizedExecution = await tx.execution.updateMany({
+      where: { id: executionId, status: { not: ExecutionStatus.COMPLETED } },
+      data: { status: ExecutionStatus.COMPLETED },
+    });
+    const finalizedWorkflow = await tx.workflow.updateMany({
+      where: { id: workflowId, status: { not: WorkflowStatus.COMPLETED } },
+      data: { status: WorkflowStatus.COMPLETED },
+    });
+
+    const transitioned =
+      finalizedExecution.count > 0 || finalizedWorkflow.count > 0;
+
+    if (transitioned) {
+      await tx.project.update({
+        where: { id: projectId },
+        data: { status: "IDLE" },
+      });
+      await tx.runtimeEvent.createMany({
+        data: [
+          { executionId, type: "execution.completed", payload: { executionId } },
+          { executionId, type: "workflow.completed", payload: { workflowId } },
+        ],
+      });
+    }
+
+    return transitioned;
+  });
+
+  return { doableExecutionId: executionId, finalized };
 }
 
 /**
