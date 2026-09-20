@@ -10,6 +10,7 @@ import type {
   RunArchitectNodeActivityInput,
   ArchitectNodeActivityResult,
 } from "../contracts/hcr";
+import { isHcrDomainFailure } from "../contracts/hcr";
 
 /**
  * Read-only validation that the Doable rows referenced by Temporal exist and
@@ -214,11 +215,7 @@ export async function runArchitectNode(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (
-      message.includes("Failed to parse/validate JSON") ||
-      message.includes("not found") ||
-      message.includes("does not belong")
-    ) {
+    if (isHcrDomainFailure(message)) {
       throw ApplicationFailure.nonRetryable(message, "HcrDomainFailure");
     }
     throw error instanceof Error ? error : new Error(message);

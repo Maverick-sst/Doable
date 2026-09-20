@@ -77,8 +77,6 @@ export interface RunArchitectNodeActivityInput {
   prompt: string;
   inputArtifactId?: string | null;
 }
-
-/** Result of the real ARCHITECT node Activity. */
 export interface ArchitectNodeActivityResult {
   doableProjectId: string;
   doableWorkflowId: string;
@@ -88,4 +86,22 @@ export interface ArchitectNodeActivityResult {
   artifactId: string | null;
   artifactType: string | null;
   nodeMigrated: true;
+}
+
+/**
+ * Narrow testability hook (Agent 04): pure failure classifier shared by the
+ * ARCHITECT activity. Existing `executeNode` throws plain Errors, so the
+ * adapter classifies by message. Extracted here so `bun test` can verify the
+ * taxonomy without a DB or Temporal server.
+ *
+ * - true (non-retryable): LLM JSON validation exhausted, missing records,
+ *   ownership mismatches — retrying cannot succeed.
+ * - false (retryable): transport/DB/embedding errors — Temporal may retry.
+ */
+export function isHcrDomainFailure(message: string): boolean {
+  return (
+    message.includes("Failed to parse/validate JSON") ||
+    message.includes("not found") ||
+    message.includes("does not belong")
+  );
 }
