@@ -20,6 +20,10 @@ export interface ExecuteNodeInput {
   prompt: string;            // The original user prompt
   nodeConfig: NodeConfig;
   inputArtifactId: string | null;
+  // Temporal HCR migration boundary: when false, skip the Inngest
+  // `node/completed` send so Temporal owns sequencing. Defaults true to
+  // preserve existing Inngest behavior. See HCR_MIGRATION_MAP.md §4.
+  emitCompletionEvent?: boolean;
 }
 
 export interface ExecuteNodeResult {
@@ -42,6 +46,7 @@ function cleanAndParseJSON(content: string, artifactType: ArtifactType) {
 
 export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeResult> {
   const { projectId, userId, workflowId, executionId, nodeId, prompt, nodeConfig, inputArtifactId } = input;
+  const emitCompletionEvent = input.emitCompletionEvent ?? true;
 
   // 1. Mark node/execution RUNNING + emit events
   await prisma.execution.update({
@@ -154,20 +159,22 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
       },
     });
 
-    // Fire inngest event
-    await inngest.send({
-      name: "node/completed",
-      data: {
-        projectId,
-        userId,
-        workflowId,
-        executionId,
-        nodeType: nodeConfig.nodeType,
-        outputArtifactId: artifactId,
-        outputArtifactType: nodeConfig.outputArtifactType,
-        prompt,
-      },
-    });
+    // Fire inngest event (skipped when Temporal owns sequencing).
+    if (emitCompletionEvent) {
+      await inngest.send({
+        name: "node/completed",
+        data: {
+          projectId,
+          userId,
+          workflowId,
+          executionId,
+          nodeType: nodeConfig.nodeType,
+          outputArtifactId: artifactId,
+          outputArtifactType: nodeConfig.outputArtifactType,
+          prompt,
+        },
+      });
+    }
 
   } else {
     // 4. Tool call flow (FE/BE)
@@ -295,19 +302,21 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
       });
     }
 
-    await inngest.send({
-      name: "node/completed",
-      data: {
-        projectId,
-        userId,
-        workflowId,
-        executionId,
-        nodeType: nodeConfig.nodeType,
-        outputArtifactId: null,
-        outputArtifactType: null,
-        prompt,
-      },
-    });
+    if (emitCompletionEvent) {
+      await inngest.send({
+        name: "node/completed",
+        data: {
+          projectId,
+          userId,
+          workflowId,
+          executionId,
+          nodeType: nodeConfig.nodeType,
+          outputArtifactId: null,
+          outputArtifactType: null,
+          prompt,
+        },
+      });
+    }
   }
 
   return {

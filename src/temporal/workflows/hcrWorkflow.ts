@@ -4,22 +4,34 @@ import type {
   TemporalHcrResult,
 } from "../contracts/hcr";
 
-// Activities own all I/O (Prisma reads). The workflow only orchestrates order
-// and carries small serializable state, keeping replay deterministic.
-const { validateHcrContext, runHcrNodeBoundary } = wf.proxyActivities<
+// Validation is a short read-only DB check; the ARCHITECT node performs
+// embeddings + up to 3 LLM attempts + artifact writes and needs minutes.
+// Separate proxies keep each timeout/retry policy explicit and conservative.
+const { validateHcrContext } = wf.proxyActivities<
   typeof import("../activities/hcrActivities")
 >({
-  // Conservative skeleton policy: short DB-bound steps, few retries.
-  // Agent 03 tunes the node boundary (LLM + tools need minutes, not seconds).
-  // Retrying validation is safe (read-only); retrying the future real node
-  // requires the idempotency Agent 03 must prove — hence small attempt caps here.
   startToCloseTimeout: "30 seconds",
   retry: { maximumAttempts: 3 },
 });
 
+// Parity with the Inngest node `retries:3`. Retrying is safe for product state
+// because the adapter reuses the artifact by nodeId; see runArchitectNode docs
+// for the known duplicate-event limitation on retry.
+const { runArchitectNode } = wf.proxyActivities<
+  typeof import("../activities/hcrActivities")
+>({
+  startToCloseTimeout: "5 minutes",
+  retry: { maximumAttempts: 3 },
+});
+
 /**
- * Minimal HCR orchestration skeleton:
- * execution received → validate context → single node boundary → result.
+ * First HCR vertical slice through Temporal:
+ * execution received → validate context → real ARCHITECT node → result.
+ *
+ * ARCHITECT verified as the first node against HCR_MIGRATION_MAP.md §2 (chat
+ * entry always emits ARCHITECT order:1). Later nodes stay on Inngest until
+ * their own adapter tasks; this workflow intentionally stops after ARCHITECT
+ * and returns the artifact correlation for the caller/coordinator.
  *
  * Postgres remains the product source of truth; Temporal only decides WHEN
  * each Activity runs and survives worker restarts between them.
@@ -29,7 +41,11 @@ export async function hcrWorkflow(
 ): Promise<TemporalHcrResult> {
   const validated = await validateHcrContext({ identity: input.identity });
 
-  const nodeResult = await runHcrNodeBoundary({ identity: input.identity });
+  const nodeResult = await runArchitectNode({
+    identity: input.identity,
+    prompt: input.prompt,
+    inputArtifactId: input.inputArtifactId ?? null,
+  });
 
   return {
     doableProjectId: validated.doableProjectId,
@@ -39,5 +55,8 @@ export async function hcrWorkflow(
     executionStatus: validated.executionStatus,
     nodeMigrated: nodeResult.nodeMigrated,
     temporalWorkflowId: wf.workflowInfo().workflowId,
+    artifactId: nodeResult.artifactId,
+    artifactType: nodeResult.artifactType,
+    nodeType: nodeResult.nodeType,
   };
 }

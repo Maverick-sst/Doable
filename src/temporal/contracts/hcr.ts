@@ -8,9 +8,13 @@ import type { DoableIdentity } from "./types";
  * Postgres remains the product source of truth.
  */
 
-/** Input to the Temporal HCR skeleton workflow. */
+/** Input to the Temporal HCR workflow (first-node slice: ARCHITECT). */
 export interface TemporalHcrWorkflowInput {
   identity: DoableIdentity;
+  /** Original user prompt, threaded unchanged like the Inngest path. */
+  prompt: string;
+  /** Explicit input artifact; null for the first node (resolves latest DISCOVERY_REQUIREMENT). */
+  inputArtifactId?: string | null;
 }
 
 /** Input to every HCR activity. Payload stays empty until Agent 03 defines it. */
@@ -46,6 +50,10 @@ export interface TemporalHcrResult {
   executionStatus: string;
   nodeMigrated: boolean;
   temporalWorkflowId: string;
+  /** Set once the real ARCHITECT node runs (null only for skeleton boundary). */
+  artifactId?: string | null;
+  artifactType?: string | null;
+  nodeType?: string;
 }
 
 /**
@@ -61,4 +69,23 @@ export interface TemporalHcrResult {
  */
 export function buildHcrWorkflowId(identity: DoableIdentity): string {
   return `hcr-${identity.executionId}`;
+}
+
+/** Input to the real ARCHITECT node Activity (Agent 03 vertical slice). */
+export interface RunArchitectNodeActivityInput {
+  identity: DoableIdentity;
+  prompt: string;
+  inputArtifactId?: string | null;
+}
+
+/** Result of the real ARCHITECT node Activity. */
+export interface ArchitectNodeActivityResult {
+  doableProjectId: string;
+  doableWorkflowId: string;
+  doableExecutionId: string;
+  doableNodeId: string;
+  nodeType: string;
+  artifactId: string | null;
+  artifactType: string | null;
+  nodeMigrated: true;
 }
