@@ -105,3 +105,18 @@ export function isHcrDomainFailure(message: string): boolean {
     message.includes("does not belong")
   );
 }
+
+/** Input to the failure-compensation activity (Agent 05 cutover). */
+export interface MarkHcrFailedActivityInput {
+  identity: DoableIdentity;
+  /** Terminal error message recorded in the failure events (no secrets). */
+  reason: string;
+}
+
+/** Result of the failure-compensation activity. */
+export interface MarkHcrFailedActivityResult {
+  doableExecutionId: string;
+  doableNodeId: string;
+  /** True when this call transitioned rows to FAILED; false if already FAILED. */
+  markedFailed: boolean;
+}

@@ -1,5 +1,10 @@
 import { ApplicationFailure } from "@temporalio/activity";
-import { NodeType } from "@prisma/client";
+import {
+  NodeType,
+  WorkflowStatus,
+  ExecutionStatus,
+  NodeStatus,
+} from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AGENT_REGISTRY } from "@/src/cognition/agent-registry";
 import { executeNode } from "@/src/cognition/node-executor";
@@ -9,6 +14,8 @@ import type {
   HcrNodeBoundaryResult,
   RunArchitectNodeActivityInput,
   ArchitectNodeActivityResult,
+  MarkHcrFailedActivityInput,
+  MarkHcrFailedActivityResult,
 } from "../contracts/hcr";
 import { isHcrDomainFailure } from "../contracts/hcr";
 
@@ -231,4 +238,82 @@ export async function runArchitectNode(
     artifactType: nodeConfig.outputArtifactType,
     nodeMigrated: true as const,
   };
+}
+
+/**
+ * Failure compensation for the Temporal HCR path (Agent 05 cutover).
+ *
+ * Mirrors `lib/handleFailure` row-for-row (workflow/execution/node → FAILED +
+ * `workflow.failed` / `execution.failed` / `node.failed` events) so the
+ * Temporal terminal state is inspectable exactly like the Inngest one.
+ * Parity note: like `handleFailure`, it does NOT touch `Project` — a failed
+ * run leaves the project IN_PROGRESS in both orchestrators.
+ *
+ * Idempotency: every write is guarded by a conditional status check inside one
+ * transaction, so compensation retry/replay marks FAILED exactly once and
+ * never duplicates failure events. Returns `markedFailed:false` when rows
+ * were already FAILED.
+ *
+ * Only the Temporal workflow calls this (on node-activity exhaustion). The
+ * Inngest `onFailure → handleFailure` path is untouched.
+ */
+export async function markHcrFailed(
+  input: MarkHcrFailedActivityInput,
+): Promise<MarkHcrFailedActivityResult> {
+  const { identity, reason } = input;
+  const { workflowId, executionId, nodeId } = identity;
+
+  if (!workflowId || !executionId || !nodeId) {
+    throw ApplicationFailure.nonRetryable(
+      "HCR identity incomplete: workflowId/executionId/nodeId required",
+      "HcrInvalidIdentity",
+    );
+  }
+
+  const markedFailed = await prisma.$transaction(async (tx) => {
+    const failedWorkflow = await tx.workflow.updateMany({
+      where: { id: workflowId, status: { not: WorkflowStatus.FAILED } },
+      data: { status: WorkflowStatus.FAILED },
+    });
+    const failedExecution = await tx.execution.updateMany({
+      where: { id: executionId, status: { not: ExecutionStatus.FAILED } },
+      data: { status: ExecutionStatus.FAILED },
+    });
+    const failedNode = await tx.node.updateMany({
+      where: { id: nodeId, status: { not: NodeStatus.FAILED } },
+      data: { status: NodeStatus.FAILED },
+    });
+
+    const transitioned =
+      failedWorkflow.count > 0 ||
+      failedExecution.count > 0 ||
+      failedNode.count > 0;
+
+    if (transitioned) {
+      await tx.runtimeEvent.createMany({
+        data: [
+          {
+            executionId,
+            type: "workflow.failed",
+            payload: { workflowId, source: "temporal", reason },
+          },
+          {
+            executionId,
+            type: "execution.failed",
+            payload: { executionId, source: "temporal", reason },
+          },
+          {
+            executionId,
+            nodeId,
+            type: "node.failed",
+            payload: { nodeId, source: "temporal", reason },
+          },
+        ],
+      });
+    }
+
+    return transitioned;
+  });
+
+  return { doableExecutionId: executionId, doableNodeId: nodeId, markedFailed };
 }
