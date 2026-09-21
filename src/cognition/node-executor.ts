@@ -1,5 +1,5 @@
 import { NodeConfig } from "./types/node-config";
-import { ArtifactType, NodeType, NodeStatus, ExecutionStatus, MessagePhase } from "@prisma/client";
+import { ArtifactType, NodeType, NodeStatus, ExecutionStatus } from "@prisma/client";
 import { inngest } from "@/app/inngest/client";
 import { prisma } from "@/lib/prisma";
 import { callLLM } from "./llm";
@@ -22,6 +22,8 @@ export interface ExecuteNodeInput {
   nodeId: string;
   prompt: string;            // The original user prompt
   nodeConfig: NodeConfig;
+  // Retained caller contract; the Context Engine re-resolves artifacts by
+  // policy, so this is no longer read here (Seam 1 removed).
   inputArtifactId: string | null;
   // Temporal HCR migration boundary: when false, skip the Inngest
   // `node/completed` send so Temporal owns sequencing. Defaults true to
@@ -78,7 +80,7 @@ async function requestNodeContext(
 }
 
 export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeResult> {
-  const { projectId, userId, workflowId, executionId, nodeId, prompt, nodeConfig, inputArtifactId } = input;
+  const { projectId, userId, workflowId, executionId, nodeId, prompt, nodeConfig } = input;
   const emitCompletionEvent = input.emitCompletionEvent ?? true;
 
   // 1. Mark node/execution RUNNING + emit events
@@ -97,27 +99,8 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
     ],
   });
 
-  // 2. Fetch consumed artifacts
-  let inputArtifactContent: Record<string, unknown> | null = null;
-  if (inputArtifactId) {
-    const inputArtifact = await prisma.artifact.findUnique({
-      where: { id: inputArtifactId },
-    });
-    if (inputArtifact) {
-      inputArtifactContent = inputArtifact.content as Record<string, unknown>;
-    }
-  } else if (nodeConfig.consumedArtifactTypes.length > 0) {
-    const inputArtifact = await prisma.artifact.findFirst({
-      where: {
-        projectId,
-        type: nodeConfig.consumedArtifactTypes[0],
-      },
-      orderBy: { version: "desc" },
-    });
-    if (inputArtifact) {
-      inputArtifactContent = inputArtifact.content as Record<string, unknown>;
-    }
-  }
+  // 2. Consumed-artifact resolution moved behind the Context Engine, which
+  // re-queries by policy (Seam 1 removed; the unread pass-through is gone).
 
   let artifactId: string | null = null;
 
@@ -131,8 +114,6 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
       nodeConfig,
       prompt,
       {
-        files: [],
-        messages: [],
         toolHistory: [],
         currentContext: { currentTask: prompt, iteration: 0, scratchpad: [] },
         promptEmbedding,
@@ -224,22 +205,6 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
     }> = [];
 
     const promptEmbedding = await getEmbeddings(prompt);
-    
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
-      include: {
-        files: { select: { id: true, path: true, embeddingStatus: true } }
-      }
-    });
-    const files = project?.files ?? [];
-
-    const dbMessages = await prisma.message.findMany({
-      where: { projectId, phase: MessagePhase.BUILD },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-      select: { role: true, content: true },
-    });
-    const reversedMessages = dbMessages.reverse();
 
     while (iterations < maxIterations) {
       iterations++;
@@ -249,8 +214,6 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
         nodeConfig,
         prompt,
         {
-          files,
-          messages: reversedMessages,
           toolHistory,
           currentContext,
           promptEmbedding,

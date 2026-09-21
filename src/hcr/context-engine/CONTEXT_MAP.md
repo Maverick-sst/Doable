@@ -61,3 +61,22 @@ engine-internal queries (artifacts, vector files) move behind retrievers.
   preserved but dormant; do not enable globally.
 - `getEmbeddings` runs even when vector search is disabled (waste, parked —
   not this task's to fix).
+
+## Post-completion ownership (Agent 04)
+
+Live flow: `node-executor → engine.buildContext → retrievers →
+assembleContext → ContextResult`. Against the table above:
+
+- Explicit input artifact: resolution deleted from `node-executor`; the
+  unread pass-through is gone (Seam 1 removed, not merely locked).
+- File list: `retrievers/files.ts`, gated by `includeFileTree`.
+- Message history: `retrievers/message-history.ts`, gated by
+  `includeMessageHistory` (still false everywhere — dormant preserved).
+- Semantic files, consumed artifacts: unchanged retrievers.
+- Task: engine resolves `request.task || request.prompt`; assembler renders
+  the resolved value verbatim.
+- Embeddings: still caller-generated, still passed through (kept outside
+  per boundary rule); still fetched even when vector search is off (waste
+  stands, parked).
+- `buildNodeContext` is a signature-stable facade with no live callers;
+  `buildContext()` wrapper kept for the dead `hcr-agent` path only.

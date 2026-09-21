@@ -49,8 +49,6 @@ export interface RelevantFileContext {
 
 /** Caller-owned inputs that stay outside the engine in this extraction. */
 export interface CallerContextInputs {
-  files: Array<{ id: string; path: string; embeddingStatus: string }>;
-  messages: Array<{ role: string; content: string }>;
   toolHistory: Array<{
     role: "assistant" | "tool";
     content: string | null;

@@ -25,11 +25,12 @@ export async function buildNodeContext(
     inputArtifactContent: Record<string, unknown> | null;
   }
 ): Promise<LLmMessage[]> {
-  const { projectId, nodeConfig, prompt, promptEmbedding, files, messages, toolHistory, currentContext } = input;
+  const { projectId, nodeConfig, prompt, promptEmbedding, toolHistory, currentContext } = input;
 
   // Compatibility facade over the runtime contract: same inputs in, same
-  // LLmMessage[] out. `inputArtifactContent` stays accepted but unused
-  // (Seam 1); removal is a separate cleanup step.
+  // LLmMessage[] out. `files`/`messages` are still accepted but the engine
+  // re-resolves them (post-completion ownership); `inputArtifactContent`
+  // stays accepted but unused (Seam 1). Removals are separate cleanups.
   const result = await buildEngineContext(
     {
       projectId,
@@ -39,8 +40,6 @@ export async function buildNodeContext(
       policy: nodeConfig.contextConfig,
     },
     {
-      files,
-      messages,
       toolHistory,
       currentContext,
       promptEmbedding,

@@ -9,6 +9,16 @@ import type {
 export interface AssembleContextInput extends CallerContextInputs {
   systemPrompt: string;
   prompt: string;
+  /**
+   * Authoritative task, resolved by the engine (`request.task`, falling back
+   * to `request.prompt`). The assembler renders it verbatim and never picks
+   * between competing task sources itself (§8).
+   */
+  task: string;
+  /** Engine-resolved file index (replaces former caller-supplied list). */
+  files: Array<{ id: string; path: string; embeddingStatus: string }>;
+  /** Engine-resolved history (replaces former caller-supplied list). */
+  messages: Array<{ role: string; content: string }>;
   policy: ContextPolicy;
   outputMode: "structured_json" | "tool_calls";
   artifacts: ResolvedArtifact[];
@@ -26,11 +36,12 @@ export function assembleContext(input: AssembleContextInput): LLmMessage[] {
   const {
     systemPrompt,
     prompt,
+    task,
     policy,
     outputMode,
     artifacts,
-    relevantFiles,
     files,
+    relevantFiles,
     messages,
     toolHistory,
     currentContext,
@@ -119,7 +130,7 @@ ${currentContext.scratchpad.slice(-8).join("\n") || "No previous steps yet"}
 ${consumedArtifactsContent.join("\n")}
 
 === CURRENT TASK ===
-${currentContext.currentTask || prompt}
+${task}
 ${fileTreeContext}
 ${relevantFilesContext}
 ${scratchpadContext}

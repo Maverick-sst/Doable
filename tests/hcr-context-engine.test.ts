@@ -13,6 +13,7 @@ function baseInput(): AssembleContextInput {
   return {
     systemPrompt: "SYS",
     prompt: "do the thing",
+    task: "do the thing",
     policy: {
       consumedArtifactTypes: [],
       includeFileTree: false,
@@ -21,8 +22,8 @@ function baseInput(): AssembleContextInput {
     },
     outputMode: "structured_json",
     artifacts: [],
-    relevantFiles: [],
     files: [],
+    relevantFiles: [],
     messages: [],
     toolHistory: [],
     currentContext: { currentTask: "", iteration: 0, scratchpad: [] },
@@ -41,9 +42,9 @@ describe("Context assembly ordering", () => {
     expect(blob.includes("do the thing")).toBe(true);
   });
 
-  test("currentTask wins over prompt when set", () => {
+  test("task renders verbatim from the resolved field", () => {
     const input = baseInput();
-    input.currentContext.currentTask = "explicit task";
+    input.task = "explicit task";
     const messages = assembleContext(input);
     expect(
       ((messages[1] as { content: string }).content.includes("explicit task")),
@@ -226,9 +227,11 @@ describe("Tool history mapping", () => {
   });
 });
 
-describe("Dead input seam (locked, not removed)", () => {
-  test("assembly takes no inputArtifactContent field", () => {
-    expect("inputArtifactContent" in baseInput()).toBe(false);
+describe("Removed input seam (locked, not reintroduced)", () => {
+  test("assembly takes an explicit task and no inputArtifactContent field", () => {
+    const input = baseInput();
+    expect("inputArtifactContent" in input).toBe(false);
+    expect(input.task).toBe("do the thing");
   });
 });
 
@@ -281,8 +284,6 @@ describe("Context Engine entry point (runtime contract)", () => {
         },
       },
       {
-        files: [],
-        messages: [],
         toolHistory: [],
         currentContext: { currentTask: "", iteration: 0, scratchpad: [] },
         promptEmbedding: [],
@@ -303,8 +304,6 @@ describe("Context Engine entry point (runtime contract)", () => {
       "@/src/hcr/context-engine/engine"
     );
     const callerInputs = {
-      files: [],
-      messages: [],
       toolHistory: [],
       currentContext: { currentTask: "", iteration: 0, scratchpad: [] as string[] },
       promptEmbedding: [] as number[],
@@ -344,7 +343,7 @@ describe("Context Engine entry point (runtime contract)", () => {
     expect(second.messages).toEqual(first.messages);
   });
 
-  test("caller inputs propagate: files, messages, tool history, task", async () => {
+  test("caller inputs propagate: tool history, task, scratchpad (files/messages are engine-retrieved)", async () => {
     const { buildContext } = await import(
       "@/src/hcr/context-engine/engine"
     );
@@ -356,14 +355,12 @@ describe("Context Engine entry point (runtime contract)", () => {
         prompt: "do the thing",
         policy: {
           consumedArtifactTypes: [],
-          includeFileTree: true,
+          includeFileTree: false,
           includeVectorSearch: false,
-          includeMessageHistory: true,
+          includeMessageHistory: false,
         },
       },
       {
-        files: [{ id: "1", path: "a.ts", embeddingStatus: "x" }],
-        messages: [{ role: "USER", content: "prior" }],
         toolHistory: [{ role: "tool", content: "ok", tool_call_id: "c9" }],
         currentContext: { currentTask: "live task", iteration: 3, scratchpad: ["s1"] },
         promptEmbedding: [0.5],
@@ -372,10 +369,8 @@ describe("Context Engine entry point (runtime contract)", () => {
       },
     );
     const blob = (result.messages[1] as { content: string }).content;
-    expect(blob.includes("a.ts")).toBe(true);
     expect(blob.includes("live task")).toBe(true);
     expect(blob.includes("s1")).toBe(true);
-    expect(result.messages[2]).toEqual({ role: "user", content: "prior" });
     expect(
       result.messages.some(
         (m) => (m as { tool_call_id?: string }).tool_call_id === "c9",
@@ -388,5 +383,37 @@ describe("Context Engine entry point (runtime contract)", () => {
       "@/src/hcr/context-engine/retrievers/relevant-files"
     );
     expect(await retrieveRelevantFiles("pj-1", [])).toEqual([]);
+  });
+
+  test("empty request task falls back to prompt (first-pass parity)", async () => {
+    const { buildContext } = await import(
+      "@/src/hcr/context-engine/engine"
+    );
+    const result = await buildContext(
+      {
+        projectId: "pj-1",
+        agentType: "ARCHITECT",
+        task: "",
+        prompt: "fallback prompt",
+        policy: {
+          consumedArtifactTypes: [],
+          includeFileTree: false,
+          includeVectorSearch: false,
+          includeMessageHistory: false,
+        },
+      },
+      {
+        toolHistory: [],
+        currentContext: { currentTask: "", iteration: 0, scratchpad: [] },
+        promptEmbedding: [],
+        systemPrompt: "SYS",
+        outputMode: "structured_json",
+      },
+    );
+    expect(
+      (result.messages[1] as { content: string }).content.includes(
+        "fallback prompt",
+      ),
+    ).toBe(true);
   });
 });

@@ -1,5 +1,10 @@
 # Deferred Context Architecture — Intentionally Not Built Here
 
+> Post-completion update (Agent 04): caller-owned retrieval migration is
+> DONE (files, message history behind gated retrievers). Explicit task
+> semantics are DONE (engine-resolved, assembler-rendered). What remains
+> deferred is listed below.
+
 Each item names the future owner, why it waits, and what this task left
 ready for it. Orthogonal parked items live in `d-2/hcr/HCR_KNOWN_CAVEATS.md`
 (C1–C31) and are not repeated except where they intersect.
