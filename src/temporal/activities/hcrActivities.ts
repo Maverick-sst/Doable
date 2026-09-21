@@ -1,4 +1,4 @@
-import { ApplicationFailure } from "@temporalio/activity";
+import { ApplicationFailure, Context } from "@temporalio/activity";
 import {
   NodeType,
   WorkflowStatus,
@@ -25,6 +25,51 @@ import type {
   MarkHcrFailedActivityResult,
 } from "../contracts/hcr";
 import { isHcrDomainFailure } from "../contracts/hcr";
+
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Heartbeat lease renewal around a long, non-interruptible operation (LLM
+ * waits). The wrapped function runs to completion regardless — heartbeats
+ * cannot abort an in-flight provider call — but while they arrive the server
+ * treats the activity as alive instead of falsely timing it out, and worker
+ * loss becomes detectable at the heartbeat timeout. Attempt forensics that
+ * used to depend on lossy history exports now also live in worker logs via
+ * the start/finish lines this helper emits.
+ */
+async function withHeartbeat<T>(
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const attempt = Context.current().info.attempt;
+  const startedAt = Date.now();
+  console.log(`[hcr-activity] start ${label} attempt=${attempt}`);
+  const timer = setInterval(() => {
+    try {
+      Context.current().heartbeat({ label, attempt });
+    } catch {
+      // Activity context gone (shutdown path); the operation itself still
+      // runs to completion and reports normally on settle.
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+  try {
+    const result = await fn();
+    console.log(
+      `[hcr-activity] finish ${label} attempt=${attempt} ` +
+        `elapsedMs=${Date.now() - startedAt}`,
+    );
+    return result;
+  } catch (error) {
+    console.log(
+      `[hcr-activity] error ${label} attempt=${attempt} ` +
+        `elapsedMs=${Date.now() - startedAt} ` +
+        `message=${error instanceof Error ? error.message : String(error)}`,
+    );
+    throw error;
+  } finally {
+    clearInterval(timer);
+  }
+}
 
 /**
  * Read-only validation that the Doable rows referenced by Temporal exist and
@@ -260,17 +305,22 @@ export async function runHcrNodeActivity(
 
   let result: Awaited<ReturnType<typeof executeNode>>;
   try {
-    result = await executeNode({
-      projectId: identity.projectId,
-      userId: identity.userId,
-      workflowId: identity.workflowId,
-      executionId: identity.executionId,
-      nodeId: identity.nodeId,
-      prompt,
-      inputArtifactId: inputArtifactId ?? null,
-      nodeConfig,
-      emitCompletionEvent: false,
-    });
+    // Heartbeats renew the server lease during slow-provider LLM waits so a
+    // live-but-slow call is not falsely timed out. They cannot abort the
+    // in-flight call — a past-lease completion still writes (parked caveat).
+    result = await withHeartbeat(`${nodeType}/${identity.nodeId}`, () =>
+      executeNode({
+        projectId: identity.projectId,
+        userId: identity.userId,
+        workflowId: identity.workflowId,
+        executionId: identity.executionId,
+        nodeId: identity.nodeId,
+        prompt,
+        inputArtifactId: inputArtifactId ?? null,
+        nodeConfig,
+        emitCompletionEvent: false,
+      }),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (isHcrDomainFailure(message)) {
