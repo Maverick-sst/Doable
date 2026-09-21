@@ -63,4 +63,12 @@ export interface CallerContextInputs {
     scratchpad: string[];
   };
   promptEmbedding: number[];
+  /**
+   * Runtime-held agent configuration, passed explicitly so the engine never
+   * imports the registry to discover prompts (§10 transitional direction).
+   * The runtime already owns the node/agent configuration; the engine only
+   * receives the two assembly-relevant values.
+   */
+  systemPrompt: string;
+  outputMode: "structured_json" | "tool_calls";
 }

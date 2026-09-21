@@ -1,8 +1,7 @@
 import { LLmMessage } from "@/src/shared/types";
 import { NodeConfig } from "./types/node-config";
-import { retrieveArtifacts } from "@/src/hcr/context-engine/retrievers/artifacts";
-import { retrieveRelevantFiles } from "@/src/hcr/context-engine/retrievers/relevant-files";
-import { assembleContext } from "@/src/hcr/context-engine/assembler";
+import { agentTypeForNode } from "@/src/hcr/agent-config";
+import { buildContext as buildEngineContext } from "@/src/hcr/context-engine/engine";
 
 export async function buildNodeContext(
   input: {
@@ -28,36 +27,29 @@ export async function buildNodeContext(
 ): Promise<LLmMessage[]> {
   const { projectId, nodeConfig, prompt, promptEmbedding, files, messages, toolHistory, currentContext } = input;
 
-  // Thin orchestrator over the extracted boundary: retrieval first (engine-
-  // owned queries), then pure assembly. Ordering, flags, budgets, and output
-  // shape are preserved exactly — see src/hcr/context-engine/CONTEXT_MAP.md.
-  // `inputArtifactContent` stays accepted but unused (Seam 1); removal is a
-  // separate cleanup step.
-  const artifacts =
-    nodeConfig.contextConfig.consumedArtifactTypes.length > 0
-      ? await retrieveArtifacts(
-          projectId,
-          nodeConfig.contextConfig.consumedArtifactTypes,
-        )
-      : [];
+  // Compatibility facade over the runtime contract: same inputs in, same
+  // LLmMessage[] out. `inputArtifactContent` stays accepted but unused
+  // (Seam 1); removal is a separate cleanup step.
+  const result = await buildEngineContext(
+    {
+      projectId,
+      agentType: agentTypeForNode(nodeConfig.nodeType),
+      task: currentContext.currentTask,
+      prompt,
+      policy: nodeConfig.contextConfig,
+    },
+    {
+      files,
+      messages,
+      toolHistory,
+      currentContext,
+      promptEmbedding,
+      systemPrompt: nodeConfig.systemPrompt,
+      outputMode: nodeConfig.outputMode,
+    },
+  );
 
-  const relevantFiles = nodeConfig.contextConfig.includeVectorSearch
-    ? await retrieveRelevantFiles(projectId, promptEmbedding)
-    : [];
-
-  return assembleContext({
-    systemPrompt: nodeConfig.systemPrompt,
-    prompt,
-    policy: nodeConfig.contextConfig,
-    outputMode: nodeConfig.outputMode,
-    artifacts,
-    relevantFiles,
-    files,
-    messages,
-    toolHistory,
-    currentContext,
-    promptEmbedding,
-  });
+  return result.messages;
 }
 
 export async function buildContext(

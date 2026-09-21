@@ -3,7 +3,10 @@ import { ArtifactType, NodeType, NodeStatus, ExecutionStatus, MessagePhase } fro
 import { inngest } from "@/app/inngest/client";
 import { prisma } from "@/lib/prisma";
 import { callLLM } from "./llm";
-import { buildNodeContext } from "./context-engine";
+import * as contextEngine from "@/src/hcr/context-engine/engine";
+import { agentTypeForNode } from "@/src/hcr/agent-config";
+import type { CallerContextInputs } from "@/src/hcr/context-engine";
+import type { LLmMessage } from "@/src/shared/types";
 import { createArtifact } from "@/src/runtime/artifacts/create-artifact";
 import { executeTool } from "@/lib/tool-executor";
 import { tools } from "@/lib/tools";
@@ -42,6 +45,36 @@ function cleanAndParseJSON(content: string, artifactType: ArtifactType) {
   const jsonStr = jsonMatch ? jsonMatch[0] : content;
   const parsed = JSON.parse(jsonStr);
   return validateArtifact(artifactType, parsed);
+}
+
+// Runtime-to-engine seam: builds an explicit ContextRequest from the node's
+// execution identity and configuration, passes caller-owned inputs through
+// untouched, and returns the assembled messages. `task` carries the live
+// current task (equal to `prompt` on first pass by existing caller
+// behavior — see CONTEXT_MAP.md); the engine never reinterprets it.
+async function requestNodeContext(
+  identity: { projectId: string; executionId: string; nodeId: string },
+  nodeConfig: NodeConfig,
+  prompt: string,
+  callerInputs: Omit<CallerContextInputs, "systemPrompt" | "outputMode">,
+): Promise<LLmMessage[]> {
+  const context = await contextEngine.buildContext(
+    {
+      projectId: identity.projectId,
+      executionId: identity.executionId,
+      nodeId: identity.nodeId,
+      agentType: agentTypeForNode(nodeConfig.nodeType),
+      task: callerInputs.currentContext.currentTask,
+      prompt,
+      policy: nodeConfig.contextConfig,
+    },
+    {
+      ...callerInputs,
+      systemPrompt: nodeConfig.systemPrompt,
+      outputMode: nodeConfig.outputMode,
+    },
+  );
+  return context.messages;
 }
 
 export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeResult> {
@@ -92,18 +125,19 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
     // 3. Structured JSON flow
     const promptEmbedding = await getEmbeddings(prompt);
     
-    // Build context
-    const contextMessages = await buildNodeContext({
-      projectId,
+    // Build context through the Context Engine runtime contract
+    const contextMessages = await requestNodeContext(
+      { projectId, executionId, nodeId },
       nodeConfig,
       prompt,
-      promptEmbedding,
-      files: [],
-      messages: [],
-      toolHistory: [],
-      currentContext: { currentTask: prompt, iteration: 0, scratchpad: [] },
-      inputArtifactContent,
-    });
+      {
+        files: [],
+        messages: [],
+        toolHistory: [],
+        currentContext: { currentTask: prompt, iteration: 0, scratchpad: [] },
+        promptEmbedding,
+      },
+    );
 
     let attempts = 0;
     let parsedContent: Record<string, unknown> | null = null;
@@ -210,17 +244,18 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
     while (iterations < maxIterations) {
       iterations++;
 
-      const request = await buildNodeContext({
-        projectId,
+      const request = await requestNodeContext(
+        { projectId, executionId, nodeId },
         nodeConfig,
         prompt,
-        promptEmbedding,
-        files,
-        messages: reversedMessages,
-        toolHistory,
-        currentContext,
-        inputArtifactContent,
-      });
+        {
+          files,
+          messages: reversedMessages,
+          toolHistory,
+          currentContext,
+          promptEmbedding,
+        },
+      );
 
       const response = await callLLM(request, tools);
       const message = response.choices?.[0]?.message;

@@ -10,3 +10,4 @@ export { retrieveArtifacts } from "./retrievers/artifacts";
 export { retrieveRelevantFiles } from "./retrievers/relevant-files";
 export { assembleContext } from "./assembler";
 export type { AssembleContextInput } from "./assembler";
+export { buildContext } from "./engine";

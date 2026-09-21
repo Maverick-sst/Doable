@@ -259,3 +259,134 @@ describe("Six registry configs keep their current context shape", () => {
     }
   });
 });
+
+describe("Context Engine entry point (runtime contract)", () => {
+  test("accepts a valid ContextRequest and returns a ContextResult", async () => {
+    const { buildContext } = await import(
+      "@/src/hcr/context-engine/engine"
+    );
+    const result = await buildContext(
+      {
+        projectId: "pj-1",
+        executionId: "ex-1",
+        nodeId: "nd-1",
+        agentType: "ARCHITECT",
+        task: "do the thing",
+        prompt: "do the thing",
+        policy: {
+          consumedArtifactTypes: [],
+          includeFileTree: false,
+          includeVectorSearch: false,
+          includeMessageHistory: false,
+        },
+      },
+      {
+        files: [],
+        messages: [],
+        toolHistory: [],
+        currentContext: { currentTask: "", iteration: 0, scratchpad: [] },
+        promptEmbedding: [],
+        systemPrompt: "SYS",
+        outputMode: "structured_json",
+      },
+    );
+    expect(result.messages.length).toBe(3);
+    expect(result.messages[0]).toEqual({ role: "system", content: "SYS" });
+    expect(result.messages[2]).toEqual({
+      role: "user",
+      content: "do the thing",
+    });
+  });
+
+  test("identity fields ride along without changing assembled behavior", async () => {
+    const { buildContext } = await import(
+      "@/src/hcr/context-engine/engine"
+    );
+    const callerInputs = {
+      files: [],
+      messages: [],
+      toolHistory: [],
+      currentContext: { currentTask: "", iteration: 0, scratchpad: [] as string[] },
+      promptEmbedding: [] as number[],
+      systemPrompt: "SYS",
+      outputMode: "structured_json" as const,
+    };
+    const policy = {
+      consumedArtifactTypes: [],
+      includeFileTree: false,
+      includeVectorSearch: false,
+      includeMessageHistory: false,
+    };
+    const first = await buildContext(
+      {
+        projectId: "pj-1",
+        executionId: "ex-1",
+        nodeId: "nd-1",
+        agentType: "ARCHITECT",
+        task: "t",
+        prompt: "p",
+        policy,
+      },
+      callerInputs,
+    );
+    const second = await buildContext(
+      {
+        projectId: "pj-9",
+        executionId: "ex-9",
+        nodeId: "nd-9",
+        agentType: "FRONTEND_ENG",
+        task: "t",
+        prompt: "p",
+        policy,
+      },
+      callerInputs,
+    );
+    expect(second.messages).toEqual(first.messages);
+  });
+
+  test("caller inputs propagate: files, messages, tool history, task", async () => {
+    const { buildContext } = await import(
+      "@/src/hcr/context-engine/engine"
+    );
+    const result = await buildContext(
+      {
+        projectId: "pj-1",
+        agentType: "FRONTEND_ENG",
+        task: "live task",
+        prompt: "do the thing",
+        policy: {
+          consumedArtifactTypes: [],
+          includeFileTree: true,
+          includeVectorSearch: false,
+          includeMessageHistory: true,
+        },
+      },
+      {
+        files: [{ id: "1", path: "a.ts", embeddingStatus: "x" }],
+        messages: [{ role: "USER", content: "prior" }],
+        toolHistory: [{ role: "tool", content: "ok", tool_call_id: "c9" }],
+        currentContext: { currentTask: "live task", iteration: 3, scratchpad: ["s1"] },
+        promptEmbedding: [0.5],
+        systemPrompt: "FE-SYS",
+        outputMode: "tool_calls",
+      },
+    );
+    const blob = (result.messages[1] as { content: string }).content;
+    expect(blob.includes("a.ts")).toBe(true);
+    expect(blob.includes("live task")).toBe(true);
+    expect(blob.includes("s1")).toBe(true);
+    expect(result.messages[2]).toEqual({ role: "user", content: "prior" });
+    expect(
+      result.messages.some(
+        (m) => (m as { tool_call_id?: string }).tool_call_id === "c9",
+      ),
+    ).toBe(true);
+  });
+
+  test("empty embedding short-circuits relevant-file retrieval without DB", async () => {
+    const { retrieveRelevantFiles } = await import(
+      "@/src/hcr/context-engine/retrievers/relevant-files"
+    );
+    expect(await retrieveRelevantFiles("pj-1", [])).toEqual([]);
+  });
+});
