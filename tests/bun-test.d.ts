@@ -12,6 +12,7 @@ declare module "bun:test" {
     toBeNull(): void;
     toBeGreaterThan(expected: number): void;
     toContain(expected: unknown): void;
+    toThrow(expected?: string | Function): void;
     not: {
       toBe(expected: unknown): void;
       toBeNull(): void;
