@@ -13,7 +13,7 @@ services:
     volumes:
       - temporal-postgresql-data:/var/lib/postgresql/data
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     networks:
       - temporal-network
     healthcheck:
@@ -42,7 +42,7 @@ services:
       - TEMPORAL_ADDRESS=temporal-server:7233
       - TEMPORAL_CLI_ADDRESS=temporal-server:7233
     ports:
-      - "7233:7233"
+      - "127.0.0.1:7233:7233"
     networks:
       - temporal-network
     healthcheck:
@@ -62,7 +62,7 @@ services:
       - TEMPORAL_ADDRESS=temporal-server:7233
       - TEMPORAL_CORS_ORIGINS=http://localhost:8080
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       - temporal-network
 

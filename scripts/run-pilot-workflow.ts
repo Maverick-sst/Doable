@@ -7,7 +7,7 @@ async function main() {
   const workflowId = `pilot-workflow-${Date.now()}`;
 
   const result = await client.workflow.execute(pilotWorkflow, {
-    taskQueue: "greet-task-queue",
+    taskQueue: process.env.TEMPORAL_TASK_QUEUE ?? "pilot-queue",
     workflowId,
     args: [
       {

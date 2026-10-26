@@ -1,87 +1,88 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
 import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
-import { NextResponse } from "next/server";
-import { inngest } from "@/app/inngest/client";
-import { startHCRWorkflow } from "@/src/runtime/workflows/hcr/start-hcr-workflow";
-import { MessagePhase, ProjectStatus, NodeType } from "@prisma/client";
+import {
+  BuildStartError,
+  startBuild,
+} from "@/src/temporal/runtime";
+import { BuildNotReadyError } from "@/src/runtime/workflows/hcr/start-hcr-workflow";
 
-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-    const { user, error } = await requireDbUser();
-    if (error) return error;
+const ChatRequestSchema = z.object({
+  prompt: z.string().min(1).max(10_000),
+});
 
-    const projectId = (await params).id;
-    if (!projectId) {
-        return NextResponse.json({ error: "Missing project id" }, { status: 400 });
-    }
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { user, error } = await requireDbUser();
+  if (error) return error;
 
-    const project = await prisma.project.findFirst({
-        where: { id: projectId, userId: user.id, status: { in: ['PENDING', 'IDLE'] } }
+  const projectId = (await params).id;
+  if (!projectId) {
+    return NextResponse.json({ error: "Missing project id" }, { status: 400 });
+  }
+
+  const project = await prisma.project.findFirst({
+    where: {
+      id: projectId,
+      userId: user.id,
+      archivedAt: null,
+    },
+    select: { id: true },
+  });
+  if (!project) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON format" }, { status: 400 });
+  }
+
+  const parsed = ChatRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "prompt is required", details: parsed.error.flatten() },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const run = await startBuild({
+      projectId,
+      userId: user.id,
+      prompt: parsed.data.prompt,
     });
-    if (!project) {
-        return NextResponse.json({ error: "Project not found or not in a valid state" }, { status: 404 });
+
+    return NextResponse.json(
+      {
+        projectId: run.projectId,
+        messageId: run.messageId,
+        workflowId: run.workflowId,
+        executionId: run.executionId,
+        temporalWorkflowId: run.temporalWorkflowId,
+        status: "processing",
+      },
+      { status: 202 },
+    );
+  } catch (error) {
+    if (error instanceof BuildNotReadyError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
     }
-
-    let body: { prompt: string };
-    try {
-        body = await request.json();
-    } catch {
-        return NextResponse.json({ error: "Invalid JSON format" }, { status: 400 });
+    if (error instanceof BuildStartError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
     }
-
-    const { prompt } = body;
-    if (!prompt || typeof prompt !== "string") {
-        return NextResponse.json({ error: "prompt is required" }, { status: 400 });
-    }
-
-    try {
-        // Create the message in BUILD phase
-        const message = await prisma.message.create({
-            data: {
-                projectId,
-                role: "USER",
-                content: prompt,
-                phase: MessagePhase.BUILD,
-            }
-        });
-
-        // Initialize the HCR workflow tracking state
-        const { workflowId, executionId, nodeId } = await startHCRWorkflow(projectId, user.id, prompt);
-
-        // Update project status to IN_PROGRESS
-        await prisma.project.update({
-            where: { id: projectId },
-            data: { status: ProjectStatus.IN_PROGRESS }
-        });
-
-        // Fire the inngest event to trigger background HCR execution
-        try {
-            await inngest.send({
-                name: "node/execute",
-                data: {
-                    projectId,
-                    userId: user.id,
-                    workflowId,
-                    executionId,
-                    nodeId,
-                    nodeType: NodeType.ARCHITECT,
-                    prompt: message.content,
-                    inputArtifactId: null,
-                }
-            });
-        } catch (err) {
-            console.error("Inngest send error:", err);
-            return NextResponse.json({ error: "Failed to start workflow worker" }, { status: 500 });
-        }
-
-        return NextResponse.json({
-            projectId,
-            messageId: message.id,
-            message: message.content,
-            status: "processing"
-        });
-
-    } catch (err) {
-        console.error("Chat handler error:", err);
-        return NextResponse.json({ error: "Failed to initialize chat runtime" }, { status: 500 });
-    }
+    console.error("Build start failure:", {
+      projectId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json(
+      { error: "Failed to initialize the build" },
+      { status: 500 },
+    );
+  }
 }

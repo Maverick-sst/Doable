@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const PATH_REGEX = /^[A-Za-z0-9._\-/]+$/;
-const PathSchema = z
+export const PathSchema = z
     .string()
     .min(1, "Path is required")
     .max(300, "Path too long")
@@ -11,7 +11,7 @@ const PathSchema = z
     .refine((p) => !p.includes("//"), "Path cannot contain '//' ");
 
 
-const ContentSchema = z.string().max(20_00_000, "content too large");
+export const ContentSchema = z.string().max(2_000_000, "content too large");
 
 export const CreateFileSchema = z.object({
     path: PathSchema,

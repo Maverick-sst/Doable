@@ -1,27 +1,28 @@
+import { z } from "zod";
 import { callLLM } from "./llm";
-import { LLmMessage } from "@/src/shared/types";
+import type { LLmMessage } from "@/src/shared/types";
 
-interface DiscoveryAgentResponse {
-  message: string;
-  discoveryComplete: boolean;
-  requirements?: Record<string, unknown>;
-  techStack?: Record<string, unknown>;
-}
+const DiscoveryResponseSchema = z.object({
+  message: z.string().min(1),
+  discoveryComplete: z.boolean(),
+  requirements: z.record(z.string(), z.unknown()).optional(),
+  techStack: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type DiscoveryAgentResponse = z.infer<typeof DiscoveryResponseSchema>;
 
 export async function callDiscoveryAgent(
   domain: string,
   prompt: string,
-  history: { role: string; content: string }[]
+  history: { role: string; content: string }[],
 ): Promise<DiscoveryAgentResponse> {
-
-  console.log("---------------1.Entering the discovery-agent func-----------")
   const systemPrompt = `
 You are a requirement discovery agent for Doable, an AI software engineering platform.
 Domain: ${domain}
 
-Your job: Ask maximum 3-5 focused questions to fully understand the user's project.
-Ask ONE question at a time. Be friendly, concise, non-technical.
-If user says "surprise me" → pick sensible defaults immediately.
+Your job: ask focused questions that change architecture, scope, data, security,
+or acceptance criteria. Ask ONE question at a time. Be concise and non-technical.
+If the user says "surprise me", choose sensible defaults immediately.
 
 When you have enough information, respond with ONLY this exact JSON:
 {
@@ -37,46 +38,46 @@ When you have enough information, respond with ONLY this exact JSON:
     "technicalConstraints": [],
     "productConstraints": [],
     "assumptions": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "acceptanceCriteria": ["criterion1"]
   },
   "techStack": {
-    "frontend": "React + Vite + Tailwind etc",
-    "backend": "Node.js + Express etc",
-    "database": "PostgreSQL etc",
-    "auth": "Clerk etc"
+    "frontend": "React + Vite + Tailwind",
+    "backend": "Node.js + Express",
+    "database": "PostgreSQL",
+    "auth": "local"
   }
 }
 
 Until you have enough information, respond with ONLY this JSON:
-{
-  "message": "your question here",
-  "discoveryComplete": false
-}
+{ "message": "your question here", "discoveryComplete": false }
 
 NEVER explain yourself. NEVER start building. NEVER use tools. ONLY output JSON.
 `;
 
   const messages: LLmMessage[] = [
     { role: "system", content: systemPrompt },
-    // Inject history correctly
-    ...history.map((m) => ({
-      role: (m.role === "USER" ? "user" : "assistant") as "user" | "assistant",
-      content: m.content,
+    ...history.map((message) => ({
+      role: (message.role === "USER" ? "user" : "assistant") as
+        | "user"
+        | "assistant",
+      content: message.content,
     })),
     { role: "user", content: prompt },
   ];
 
-  console.log("----------------2.calling llm-----------------")
-  const response = await callLLM(messages, []);
-  const rawContent = response.choices[0].message.content;
-  console.log(`---------------${rawContent}--------------`);
-  
+  const response = await callLLM(messages, [], {
+    responseFormat: "json",
+  });
+  const rawContent = response.content ?? "";
+
   try {
-    console.log("------------------4.parsing to begin------------");
-    return JSON.parse(rawContent) as DiscoveryAgentResponse;
-  } catch(error){
-    // LLM returned non-JSON — treat as a follow-up question
-    console.log(`${error}----->error while parsing the content------------`);
-    return { message: rawContent, discoveryComplete: false };
+    const parsed = DiscoveryResponseSchema.safeParse(JSON.parse(rawContent));
+    if (parsed.success) return parsed.data;
+  } catch {
+    // A non-JSON response is treated as a follow-up question, never as a
+    // completed discovery.
   }
+
+  return { message: rawContent.trim() || "Could you tell me more?", discoveryComplete: false };
 }

@@ -1,322 +1,214 @@
-'use client'
+"use client";
 
-import { useMemo, useState } from 'react'
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { AppShell } from "@/components/app-shell";
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  Field,
+  Input,
+  Spinner,
+  Textarea,
+  statusTone,
+} from "@/components/ui";
 
-type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE'
-
-type LogEntry = {
-  time: string
-  label: string
-  method: HttpMethod
-  url: string
-  status?: number
-  ok?: boolean
-  payload?: unknown
-  error?: string
-}
-
-function pretty(value: unknown) {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
-}
+type Project = {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export default function DashboardPage() {
-  const [projectName, setProjectName] = useState('Demo Project')
-  const [projectDescription, setProjectDescription] = useState('Temporary testing project')
-  const [domain, setDomain] = useState('FULL_STACK_APPLICATION')
-  const [techStack, setTechStack] = useState('')
-  const [requirements, setRequirements] = useState('')
-  const [projectId, setProjectId] = useState('')
+  const router = useRouter();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [domain, setDomain] = useState("FULL_STACK_APPLICATION");
 
-  const [fileId, setFileId] = useState('')
-  const [filePath, setFilePath] = useState('src/index.ts')
-  const [fileContent, setFileContent] = useState('console.log("hello from test harness")')
-  const [updatedPath, setUpdatedPath] = useState('src/main.ts')
-  const [updatedContent, setUpdatedContent] = useState('console.log("updated content")')
-
-  const [busy, setBusy] = useState(false)
-  const [logs, setLogs] = useState<LogEntry[]>([])
-
-  const canUseProjectId = useMemo(() => projectId.trim().length > 0, [projectId])
-  const canUseFileId = useMemo(() => fileId.trim().length > 0, [fileId])
-
-  const appendLog = (entry: LogEntry) => {
-    setLogs((prev) => [entry, ...prev])
-  }
-
-  async function callApi(label: string, method: HttpMethod, url: string, body?: unknown) {
-    setBusy(true)
+  const load = useCallback(async () => {
     try {
-      const response = await fetch(url, {
-        method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
-      })
-
-      const contentType = response.headers.get('content-type')
-      const parsed = contentType?.includes('application/json')
-        ? await response.json()
-        : await response.text()
-
-      appendLog({
-        time: new Date().toLocaleTimeString(),
-        label,
-        method,
-        url,
-        status: response.status,
-        ok: response.ok,
-        payload: parsed,
-      })
-
-      return parsed
-    } catch (error) {
-      appendLog({
-        time: new Date().toLocaleTimeString(),
-        label,
-        method,
-        url,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      })
-      return null
+      const response = await fetch("/api/projects", { cache: "no-store" });
+      const data = (await response.json()) as { projects?: Project[]; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Could not load projects");
+      setProjects(data.projects ?? []);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load projects");
     } finally {
-      setBusy(false)
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function createProject(event: React.FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, domain }),
+      });
+      const data = (await response.json()) as { projectId?: string; error?: string };
+      if (!response.ok || !data.projectId) {
+        throw new Error(data.error ?? "Could not create project");
+      }
+      router.push(`/projects/${data.projectId}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create project");
+    } finally {
+      setCreating(false);
     }
   }
 
-  async function createProject() {
-    const result = await callApi('Create Project', 'POST', '/api/projects', {
-      name: projectName,
-      description: projectDescription,
-      domain,
-      techStack,
-      requirements
-    })
-    if (result && typeof result === 'object' && 'projectId' in result && typeof result.projectId === 'string') {
-      setProjectId(result.projectId)
+  async function removeProject(project: Project) {
+    if (!window.confirm(`Delete “${project.name}”? This removes its history.`)) {
+      return;
     }
-  }
-
-  async function listProjects() {
-    await callApi('List Projects', 'GET', '/api/projects')
-  }
-
-  async function getProjectById() {
-    await callApi('Get Project by ID', 'GET', `/api/projects/${projectId}`)
-  }
-
-  async function deleteProjectById() {
-    await callApi('Delete Project by ID', 'DELETE', `/api/projects/${projectId}`)
-  }
-
-  async function createFile() {
-    const result = await callApi('Create File', 'POST', `/api/projects/${projectId}/files`, {
-      path: filePath,
-      content: fileContent,
-    })
-    if (result && typeof result === 'object' && 'fileId' in result && typeof result.fileId === 'string') {
-      setFileId(result.fileId)
+    const response = await fetch(`/api/projects/${project.id}`, {
+      method: "DELETE",
+    });
+    if (response.ok) {
+      setProjects((current) => current.filter((item) => item.id !== project.id));
     }
-  }
-
-  async function getFileById() {
-    await callApi('Get File by ID', 'GET', `/api/projects/${projectId}/files/${fileId}`)
-  }
-
-  async function patchFileById() {
-    await callApi('Patch File by ID', 'PATCH', `/api/projects/${projectId}/files/${fileId}`, {
-      path: updatedPath,
-      content: updatedContent,
-    })
-  }
-
-  async function deleteFileById() {
-    await callApi('Delete File by ID', 'DELETE', `/api/projects/${projectId}/files/${fileId}`)
   }
 
   return (
-    <main className="min-h-screen bg-zinc-50 p-6 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <div className="mx-auto grid w-full max-w-7xl gap-6 lg:grid-cols-2">
-        <section className="space-y-6 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <div>
-            <h1 className="text-2xl font-bold">Temporary API Test Harness</h1>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              Use this page to test project/file endpoints with your existing Clerk browser session.
-            </p>
-            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-              Note: This is a temporary testing UI. Remove after API validation.
-            </p>
-          </div>
+    <AppShell>
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            Start with an idea. Approve the requirements before a build begins.
+          </p>
+        </div>
+        <Button variant="secondary" onClick={() => void load()}>
+          Refresh
+        </Button>
+      </div>
 
-          <div className="space-y-3">
-            <h2 className="text-lg font-semibold">Project Inputs</h2>
-            <input
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              placeholder="Project name"
+      {error ? (
+        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+        <section className="space-y-4">
+          {loading ? (
+            <Card>
+              <CardBody>
+                <Spinner label="Loading projects" />
+              </CardBody>
+            </Card>
+          ) : projects.length === 0 ? (
+            <EmptyState
+              title="No projects yet"
+              description="Create your first project on the right. Discovery will ask a few focused questions before anything is built."
             />
-            <textarea
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={projectDescription}
-              onChange={(e) => setProjectDescription(e.target.value)}
-              rows={2}
-              placeholder="Project description"
-            />
-            
-            <div className="rounded border border-zinc-200 p-3 dark:border-zinc-800 space-y-3">
-              <div>
-                <label className="block text-sm font-medium mb-2 text-zinc-700 dark:text-zinc-300">Domain</label>
-                <div className="flex flex-wrap gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="domain"
-                      value="FULL_STACK_APPLICATION"
-                      checked={domain === "FULL_STACK_APPLICATION"}
-                      onChange={(e) => setDomain(e.target.value)}
-                      className="w-4 h-4 text-blue-600 border-zinc-300 focus:ring-blue-500"
-                    />
-                    <span className="text-sm">FULL_STACK_APPLICATION</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="domain"
-                      value="LANDING_PAGE"
-                      checked={domain === "LANDING_PAGE"}
-                      onChange={(e) => setDomain(e.target.value)}
-                      className="w-4 h-4 text-blue-600 border-zinc-300 focus:ring-blue-500"
-                    />
-                    <span className="text-sm">LANDING_PAGE</span>
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <input
-                  className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-                  value={techStack}
-                  onChange={(e) => setTechStack(e.target.value)}
-                  placeholder="Tech Stack (e.g. React, Node.js, PostgreSQL...)"
-                />
-              </div>
-
-              <div>
-                <textarea
-                  className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-                  value={requirements}
-                  onChange={(e) => setRequirements(e.target.value)}
-                  rows={3}
-                  placeholder="Requirements: Detail the specific features, constraints, or business logic..."
-                />
-              </div>
-            </div>
-
-            <input
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              placeholder="Project ID (auto-filled after create)"
-            />
-
-            <div className="flex flex-wrap gap-2">
-              <button disabled={busy} onClick={createProject} className="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50">Create Project</button>
-              <button disabled={busy} onClick={listProjects} className="rounded bg-zinc-700 px-3 py-2 text-sm text-white disabled:opacity-50">List Projects</button>
-              <button disabled={busy || !canUseProjectId} onClick={getProjectById} className="rounded bg-emerald-700 px-3 py-2 text-sm text-white disabled:opacity-50">Get Project</button>
-              <button disabled={busy || !canUseProjectId} onClick={deleteProjectById} className="rounded bg-rose-700 px-3 py-2 text-sm text-white disabled:opacity-50">Delete Project</button>
-            </div>
-          </div>
-
-          <div className="space-y-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-            <h2 className="text-lg font-semibold">File Inputs</h2>
-            <input
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={filePath}
-              onChange={(e) => setFilePath(e.target.value)}
-              placeholder="File path (e.g. src/index.ts)"
-            />
-            <textarea
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={fileContent}
-              onChange={(e) => setFileContent(e.target.value)}
-              rows={4}
-              placeholder="File content"
-            />
-            <input
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={fileId}
-              onChange={(e) => setFileId(e.target.value)}
-              placeholder="File ID (auto-filled after create)"
-            />
-
-            <input
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={updatedPath}
-              onChange={(e) => setUpdatedPath(e.target.value)}
-              placeholder="Updated file path"
-            />
-            <textarea
-              className="w-full rounded border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-              value={updatedContent}
-              onChange={(e) => setUpdatedContent(e.target.value)}
-              rows={4}
-              placeholder="Updated file content"
-            />
-
-            <div className="flex flex-wrap gap-2">
-              <button disabled={busy || !canUseProjectId} onClick={createFile} className="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50">Create File</button>
-              <button disabled={busy || !canUseProjectId || !canUseFileId} onClick={getFileById} className="rounded bg-emerald-700 px-3 py-2 text-sm text-white disabled:opacity-50">Get File</button>
-              <button disabled={busy || !canUseProjectId || !canUseFileId} onClick={patchFileById} className="rounded bg-amber-600 px-3 py-2 text-sm text-white disabled:opacity-50">Patch File</button>
-              <button disabled={busy || !canUseProjectId || !canUseFileId} onClick={deleteFileById} className="rounded bg-rose-700 px-3 py-2 text-sm text-white disabled:opacity-50">Delete File</button>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Response Log</h2>
-            <button
-              disabled={busy}
-              onClick={() => setLogs([])}
-              className="rounded border border-zinc-300 px-3 py-1 text-xs dark:border-zinc-700"
-            >
-              Clear
-            </button>
-          </div>
-
-          {logs.length === 0 ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">No requests yet. Click any action to begin testing.</p>
           ) : (
-            <div className="space-y-3">
-              {logs.map((log, idx) => (
-                <article key={`${log.time}-${idx}`} className="rounded border border-zinc-200 p-3 text-sm dark:border-zinc-800">
-                  <div className="mb-1 flex flex-wrap items-center gap-2">
-                    <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">{log.time}</span>
-                    <span className="font-medium">{log.label}</span>
-                    <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">{log.method}</span>
-                    <span className="break-all text-xs text-zinc-600 dark:text-zinc-400">{log.url}</span>
-                  </div>
-
-                  {typeof log.status === 'number' && (
-                    <p className={`mb-2 text-xs ${log.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      Status: {log.status} ({log.ok ? 'OK' : 'Error'})
+            projects.map((project) => (
+              <Card key={project.id}>
+                <CardBody className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link
+                        href={`/projects/${project.id}`}
+                        className="truncate text-sm font-semibold text-zinc-950 hover:text-indigo-600 dark:text-zinc-50 dark:hover:text-indigo-400"
+                      >
+                        {project.name}
+                      </Link>
+                      <Badge tone={statusTone(project.status)}>
+                        {project.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 line-clamp-2 max-w-xl text-xs text-zinc-500 dark:text-zinc-400">
+                      {project.description || "No description"}
                     </p>
-                  )}
-
-                  {log.error ? (
-                    <p className="text-rose-600">{log.error}</p>
-                  ) : (
-                    <pre className="overflow-x-auto rounded bg-zinc-950 p-3 text-xs text-zinc-100">{pretty(log.payload)}</pre>
-                  )}
-                </article>
-              ))}
-            </div>
+                    <p className="mt-2 text-[11px] text-zinc-400">
+                      Updated {new Date(project.updatedAt).toLocaleString()}
+                    </p>
+                    {project.failureReason ? (
+                      <p className="mt-2 rounded-md bg-rose-50 px-2 py-1 text-[11px] text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                        {project.failureReason}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Link href={`/projects/${project.id}`}>
+                      <Button>Open</Button>
+                    </Link>
+                    <Button variant="danger" onClick={() => void removeProject(project)}>
+                      Delete
+                    </Button>
+                  </div>
+                </CardBody>
+              </Card>
+            ))
           )}
         </section>
+
+        <Card className="h-fit">
+          <CardHeader
+            title="New project"
+            description="Name it, choose a domain, then start discovery."
+          />
+          <CardBody>
+            <form className="space-y-4" onSubmit={createProject}>
+              <Field label="Project name">
+                <Input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Team task manager"
+                  maxLength={120}
+                  required
+                />
+              </Field>
+              <Field label="Short description" hint="Optional; discovery will refine it.">
+                <Textarea
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  rows={3}
+                  placeholder="A task manager for small remote teams..."
+                />
+              </Field>
+              <Field label="Domain">
+                <select
+                  className="h-9 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                  value={domain}
+                  onChange={(event) => setDomain(event.target.value)}
+                >
+                  <option value="FULL_STACK_APPLICATION">
+                    Full-stack application
+                  </option>
+                  <option value="LANDING_PAGE">Landing page</option>
+                </select>
+              </Field>
+              <Button type="submit" disabled={creating || !name.trim()} className="w-full">
+                {creating ? "Creating..." : "Create project"}
+              </Button>
+            </form>
+          </CardBody>
+        </Card>
       </div>
-    </main>
-  )
+    </AppShell>
+  );
 }

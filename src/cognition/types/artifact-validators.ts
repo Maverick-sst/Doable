@@ -12,6 +12,28 @@ const PathSchema = z
   .refine((p) => !p.includes(".."), "Path cannot contain '..'")
   .refine((p) => !p.includes("//"), "Path cannot contain '//'");
 
+export const DiscoveryRequirementSchema = z.object({
+  projectIntent: z.object({
+    summary: z.string().min(1),
+    domain: z.string().min(1),
+    projectType: z.string().min(1),
+  }),
+  coreFeatures: z.array(z.string()),
+  userFlows: z.array(z.string()),
+  constraints: z.object({
+    technical: z.array(z.string()),
+    product: z.array(z.string()),
+    business: z.array(z.string()),
+  }),
+  techStack: z.record(z.string(), z.string().optional()),
+  dataEntities: z.array(z.string()),
+  authRequirements: z.array(z.string()),
+  integrations: z.array(z.string()),
+  assumptions: z.array(z.string()),
+  knownAmbiguities: z.array(z.string()),
+  confidenceScore: z.number().min(0).max(1),
+});
+
 export const ArchitectureSpecSchema = z.object({
   projectUnderstanding: z.object({
     oneLiner: z.string().min(1),
@@ -155,6 +177,9 @@ export const ExecutionPlanSchema = z.object({
 export function validateArtifact(type: ArtifactType, content: unknown): Record<string, unknown> {
   let result;
   switch (type) {
+    case ArtifactType.DISCOVERY_REQUIREMENT:
+      result = DiscoveryRequirementSchema.safeParse(content);
+      break;
     case ArtifactType.ARCHITECTURE_SPEC:
       result = ArchitectureSpecSchema.safeParse(content);
       break;

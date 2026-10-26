@@ -1,13 +1,26 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import {
+  ExecutionStatus,
+  MessagePhase,
+  NodeStatus,
+  ProjectStatus,
+  WorkflowStatus,
+} from "@prisma/client";
 import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
 import { callDiscoveryAgent } from "@/src/cognition/discovery-agent";
 import { startDiscoveryWorkflow } from "@/src/runtime/workflows/discovery/start-discovery-workflow";
 import { completeDiscoveryWorkflow } from "@/src/runtime/workflows/discovery/complete-discovery-workflow";
-import { MessagePhase, NodeStatus, ExecutionStatus, WorkflowStatus } from "@prisma/client";
-import { NextResponse } from "next/server";
 
-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const requestId = crypto.randomUUID();
+const DiscoveryRequestSchema = z.object({
+  prompt: z.string().min(1).max(10_000),
+});
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
   const { user, error } = await requireDbUser();
   if (error) return error;
 
@@ -15,88 +28,113 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!projectId) {
     return NextResponse.json({ error: "Missing project id" }, { status: 400 });
   }
-  console.log(`[DISCOVERY: ===== REQUEST START =====`);
-  console.log(`[DISCOVERY: projectId=${projectId}`);
-  // Find project and its memory scoped to user
-
-  console.log(`[DISCOVERY:${requestId}] PROJECT: querying`, { projectId });
 
   const project = await prisma.project.findFirst({
     where: {
       id: projectId,
       userId: user.id,
+      status: ProjectStatus.DISCOVERY,
+      archivedAt: null,
     },
-    include: {
-      memory: true,
-    },
+    include: { memory: true },
   });
 
   if (!project || !project.memory) {
-    return NextResponse.json({ error: "Project or project memory not found" }, { status: 404 });
+    return NextResponse.json(
+      {
+        error:
+          "Project not found, archived, or no longer in the discovery phase",
+      },
+      { status: 404 },
+    );
   }
 
-  console.log(`[DISCOVERY:${requestId}] BODY: parsing request`);
-  let body: { prompt: string };
+  let body: unknown;
   try {
     body = await request.json();
-    console.log(`[DISCOVERY:${requestId}] BODY: parsed successfully`, {
-    hasPrompt: !!body?.prompt,
-    promptLength: body?.prompt?.length,
-  });
-  } catch(err){
-    console.error(`[DISCOVERY:${requestId}] BODY: JSON PARSE FAILED`, err);
+  } catch {
     return NextResponse.json({ error: "Invalid JSON format" }, { status: 400 });
   }
 
-  const { prompt } = body;
-  if (!prompt || typeof prompt !== "string") {
-    return NextResponse.json({ error: "prompt is required" }, { status: 400 });
+  const parsed = DiscoveryRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "prompt is required", details: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
 
-  // Fetch recent DISCOVERY messages
+  // Read history before persisting the new turn so the current prompt is
+  // not sent to the model twice.
   const history = await prisma.message.findMany({
-    where: {
-      projectId,
-      phase: MessagePhase.DISCOVERY,
-    },
-    orderBy: {
-      createdAt: "asc",
-    },
-    select: {
-      role: true,
-      content: true,
-    },
+    where: { projectId, phase: MessagePhase.DISCOVERY },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, content: true },
   });
 
-  console.log(`[DISCOVERY:${requestId}] AGENT: calling discovery agent`);
-  // Call discovery agent
-  const agentResponse = await callDiscoveryAgent(
-    project.memory.domain,
-    prompt,
-    history
-  );
-
-  console.log(`[DISCOVERY:${requestId}] AGENT: returned`, {
-  discoveryComplete: agentResponse.discoveryComplete,
-  messageLength: agentResponse.message?.length,
-});
-  // Start Discovery workflow state tracking (for analytics/events)
-  const { workflowId, executionId, nodeId } = await startDiscoveryWorkflow(projectId);
-
-  // Save user message
   await prisma.message.create({
     data: {
       projectId,
       role: "USER",
-      content: prompt,
+      content: parsed.data.prompt,
       phase: MessagePhase.DISCOVERY,
     },
   });
 
-  let artifactId: string | undefined;
+  let agentResponse;
+  try {
+    agentResponse = await callDiscoveryAgent(
+      project.memory.domain,
+      parsed.data.prompt,
+      history,
+    );
+  } catch (error) {
+    console.error("Discovery provider failure:", {
+      projectId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json(
+      { error: "The discovery model is unavailable. Your message was saved." },
+      { status: 502 },
+    );
+  }
 
-  if (agentResponse.discoveryComplete) {
-    // Complete discovery workflow & save artifact + flip status
+  const { workflowId, executionId, nodeId } = await startDiscoveryWorkflow(
+    projectId,
+  );
+
+  await prisma.message.create({
+    data: {
+      projectId,
+      role: "ASSISTANT",
+      content: agentResponse.message,
+      phase: MessagePhase.DISCOVERY,
+      workflowId,
+      executionId,
+    },
+  });
+
+  if (!agentResponse.discoveryComplete) {
+    await prisma.node.updateMany({
+      where: { id: nodeId },
+      data: { status: NodeStatus.COMPLETED, finishedAt: new Date() },
+    });
+    await prisma.execution.updateMany({
+      where: { id: executionId },
+      data: { status: ExecutionStatus.COMPLETED, finishedAt: new Date() },
+    });
+    await prisma.workflow.updateMany({
+      where: { id: workflowId },
+      data: { status: WorkflowStatus.COMPLETED },
+    });
+
+    return NextResponse.json({
+      message: agentResponse.message,
+      discoveryComplete: false,
+    });
+  }
+
+  try {
     const artifact = await completeDiscoveryWorkflow({
       projectId,
       workflowId,
@@ -110,43 +148,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       },
     });
 
-    artifactId = artifact.id;
-
-    // Save agent message
-    await prisma.message.create({
-      data: {
-        projectId,
-        role: "ASSISTANT",
-        content: agentResponse.message,
-        phase: MessagePhase.DISCOVERY,
-      },
-    });
-
     return NextResponse.json({
       message: agentResponse.message,
       discoveryComplete: true,
-      artifactId,
+      artifactId: artifact.id,
     });
-  } else {
-    // Discovery is not complete yet — keep going
-    // Mark discovery workflow nodes as completed for this turn
-    await prisma.node.update({ where: { id: nodeId }, data: { status: NodeStatus.COMPLETED } });
-    await prisma.execution.update({ where: { id: executionId }, data: { status: ExecutionStatus.COMPLETED } });
-    await prisma.workflow.update({ where: { id: workflowId }, data: { status: WorkflowStatus.COMPLETED } });
-
-    // Save agent message
-    await prisma.message.create({
-      data: {
-        projectId,
-        role: "ASSISTANT",
-        content: agentResponse.message,
-        phase: MessagePhase.DISCOVERY,
+  } catch (error) {
+    console.error("Discovery completion failure:", {
+      projectId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json(
+      {
+        error:
+          "Discovery completed but the requirements could not be persisted. Please retry.",
       },
-    });
-
-    return NextResponse.json({
-      message: agentResponse.message,
-      discoveryComplete: false,
-    });
+      { status: 500 },
+    );
   }
 }

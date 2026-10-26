@@ -1,15 +1,22 @@
-import { NodeConfig } from "./types/node-config";
-import { ArtifactType, NodeType, NodeStatus, ExecutionStatus, MessagePhase } from "@prisma/client";
-import { inngest } from "@/app/inngest/client";
+import { ArtifactType, NodeStatus, NodeType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { callLLM } from "./llm";
-import { buildNodeContext } from "./context-engine";
+import * as contextEngine from "@/src/hcr/context-engine/engine";
+import { agentTypeForNode } from "@/src/hcr/agent-config";
+import type { CallerContextInputs } from "@/src/hcr/context-engine";
+import type { LLmMessage } from "@/src/shared/types";
 import { createArtifact } from "@/src/runtime/artifacts/create-artifact";
 import { executeTool } from "@/lib/tool-executor";
 import { tools } from "@/lib/tools";
 import { getEmbeddings } from "@/lib/embeddings";
+import { getProviderCapabilities } from "@/src/providers";
 import { handleToolCompletion } from "@/lib/toolCompletion";
 import { validateArtifact } from "./types/artifact-validators";
+import {
+  markExecutionRunning,
+  markNodeRunning,
+} from "@/src/runtime/state/transitions";
+import { NodeConfig } from "./types/node-config";
 
 export interface ExecuteNodeInput {
   projectId: string;
@@ -17,13 +24,17 @@ export interface ExecuteNodeInput {
   workflowId: string;
   executionId: string;
   nodeId: string;
-  prompt: string;            // The original user prompt
+  prompt: string;
   nodeConfig: NodeConfig;
-  inputArtifactId: string | null;
+  /**
+   * Retained caller contract for compatibility. The Context Engine resolves
+   * artifacts by policy, so this is not read here.
+   */
+  inputArtifactId?: string | null;
 }
 
 export interface ExecuteNodeResult {
-  artifactId: string | null;  // null if node produced file mutations
+  artifactId: string | null;
   nodeType: NodeType;
   workflowId: string;
   executionId: string;
@@ -33,72 +44,171 @@ export interface ExecuteNodeResult {
 }
 
 function cleanAndParseJSON(content: string, artifactType: ArtifactType) {
-  // Try to extract JSON between { and } if there's preamble
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   const jsonStr = jsonMatch ? jsonMatch[0] : content;
   const parsed = JSON.parse(jsonStr);
   return validateArtifact(artifactType, parsed);
 }
 
-export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeResult> {
-  const { projectId, userId, workflowId, executionId, nodeId, prompt, nodeConfig, inputArtifactId } = input;
+async function requestNodeContext(
+  identity: { projectId: string; executionId: string; nodeId: string },
+  nodeConfig: NodeConfig,
+  prompt: string,
+  callerInputs: Omit<CallerContextInputs, "systemPrompt" | "outputMode">,
+): Promise<LLmMessage[]> {
+  const context = await contextEngine.buildContext(
+    {
+      projectId: identity.projectId,
+      executionId: identity.executionId,
+      nodeId: identity.nodeId,
+      agentType: agentTypeForNode(nodeConfig.nodeType),
+      task: callerInputs.currentContext.currentTask,
+      prompt,
+      policy: nodeConfig.contextConfig,
+    },
+    {
+      ...callerInputs,
+      systemPrompt: nodeConfig.systemPrompt,
+      outputMode: nodeConfig.outputMode,
+    },
+  );
+  return context.messages;
+}
 
-  // 1. Mark node/execution RUNNING + emit events
-  await prisma.execution.update({
-    where: { id: executionId },
-    data: { status: ExecutionStatus.RUNNING },
+async function markNodeCompleted(
+  executionId: string,
+  nodeId: string,
+  nodeType: NodeType,
+  artifactId: string | null,
+) {
+  const changed = await prisma.node.updateMany({
+    where: { id: nodeId, status: { not: NodeStatus.COMPLETED } },
+    data: { status: NodeStatus.COMPLETED, finishedAt: new Date() },
   });
-  const node = await prisma.node.update({
-    where: { id: nodeId },
-    data: { status: NodeStatus.RUNNING },
+
+  if (changed.count > 0) {
+    await prisma.runtimeEvent.create({
+      data: {
+        executionId,
+        nodeId,
+        type: "node.completed",
+        payload: { nodeId, type: nodeType, artifactId },
+      },
+    });
+  }
+}
+
+/**
+ * Semantic retrieval is optional. When the provider has no embedding endpoint
+ * or the call fails, the node continues with no vector context instead of
+ * failing the whole build.
+ */
+async function resolvePromptEmbedding(input: {
+  prompt: string;
+  enabled: boolean;
+  executionId: string;
+  nodeId: string;
+  nodeType: NodeType;
+}): Promise<number[]> {
+  if (!input.enabled) return [];
+
+  if (!getProviderCapabilities().embeddings) {
+    await prisma.runtimeEvent.create({
+      data: {
+        executionId: input.executionId,
+        nodeId: input.nodeId,
+        type: "embeddings.skipped",
+        payload: {
+          nodeType: input.nodeType,
+          reason: "provider_without_embeddings",
+        },
+      },
+    });
+    return [];
+  }
+
+  try {
+    return await getEmbeddings(input.prompt);
+  } catch (error) {
+    await prisma.runtimeEvent.create({
+      data: {
+        executionId: input.executionId,
+        nodeId: input.nodeId,
+        type: "embeddings.skipped",
+        payload: {
+          nodeType: input.nodeType,
+          reason: "embedding_failed",
+          message: error instanceof Error ? error.message : "unknown",
+        },
+      },
+    });
+    return [];
+  }
+}
+
+async function recordUsage(
+  executionId: string,
+  nodeId: string,
+  nodeType: NodeType,
+  response: Awaited<ReturnType<typeof callLLM>>,
+) {
+  await prisma.runtimeEvent.create({
+    data: {
+      executionId,
+      nodeId,
+      type: "model.usage",
+      payload: {
+        nodeType,
+        provider: response.provider,
+        model: response.model,
+        promptTokens: response.usage?.promptTokens ?? null,
+        completionTokens: response.usage?.completionTokens ?? null,
+        totalTokens: response.usage?.totalTokens ?? null,
+      },
+    },
   });
+}
+
+export async function executeNode(
+  input: ExecuteNodeInput,
+): Promise<ExecuteNodeResult> {
+  const { projectId, executionId, nodeId, prompt, nodeConfig } = input;
+
+  await markExecutionRunning(executionId);
+  await markNodeRunning(executionId, nodeId);
   await prisma.runtimeEvent.createMany({
     data: [
       { executionId, type: "execution.running", payload: { executionId } },
-      { executionId, nodeId, type: "node.running", payload: { nodeId, type: nodeConfig.nodeType } },
+      {
+        executionId,
+        nodeId,
+        type: "node.running",
+        payload: { nodeId, type: nodeConfig.nodeType },
+      },
     ],
   });
-
-  // 2. Fetch consumed artifacts
-  let inputArtifactContent: Record<string, unknown> | null = null;
-  if (inputArtifactId) {
-    const inputArtifact = await prisma.artifact.findUnique({
-      where: { id: inputArtifactId },
-    });
-    if (inputArtifact) {
-      inputArtifactContent = inputArtifact.content as Record<string, unknown>;
-    }
-  } else if (nodeConfig.consumedArtifactTypes.length > 0) {
-    const inputArtifact = await prisma.artifact.findFirst({
-      where: {
-        projectId,
-        type: nodeConfig.consumedArtifactTypes[0],
-      },
-      orderBy: { version: "desc" },
-    });
-    if (inputArtifact) {
-      inputArtifactContent = inputArtifact.content as Record<string, unknown>;
-    }
-  }
 
   let artifactId: string | null = null;
 
   if (nodeConfig.outputMode === "structured_json") {
-    // 3. Structured JSON flow
-    const promptEmbedding = await getEmbeddings(prompt);
-    
-    // Build context
-    const contextMessages = await buildNodeContext({
-      projectId,
+    const promptEmbedding = await resolvePromptEmbedding({
+      prompt,
+      enabled: nodeConfig.contextConfig.includeVectorSearch,
+      executionId,
+      nodeId,
+      nodeType: nodeConfig.nodeType,
+    });
+
+    const contextMessages = await requestNodeContext(
+      { projectId, executionId, nodeId },
       nodeConfig,
       prompt,
-      promptEmbedding,
-      files: [],
-      messages: [],
-      toolHistory: [],
-      currentContext: { currentTask: prompt, iteration: 0, scratchpad: [] },
-      inputArtifactContent,
-    });
+      {
+        toolHistory: [],
+        currentContext: { currentTask: prompt, iteration: 0, scratchpad: [] },
+        promptEmbedding,
+      },
+    );
 
     let attempts = 0;
     let parsedContent: Record<string, unknown> | null = null;
@@ -106,75 +216,61 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
 
     while (attempts < 3) {
       try {
-        const response = await callLLM(messages, []);
-        const content = response.choices[0]?.message?.content || "";
-        parsedContent = cleanAndParseJSON(content, nodeConfig.outputArtifactType!);
+        const response = await callLLM(messages, [], {
+          responseFormat: "json",
+        });
+        await recordUsage(executionId, nodeId, nodeConfig.nodeType, response);
+        const content = response.content ?? "";
+        if (!content.trim()) throw new Error("LLM returned an empty response");
+        parsedContent = cleanAndParseJSON(
+          content,
+          nodeConfig.outputArtifactType as ArtifactType,
+        );
         break;
-      } catch (err) {
+      } catch (error) {
         attempts++;
         if (attempts >= 3) {
-          throw new Error(`Failed to parse/validate JSON output for ${nodeConfig.nodeType} after 3 attempts: ${(err as Error).message}`);
+          throw new Error(
+            `Failed to parse/validate JSON output for ${nodeConfig.nodeType} after 3 attempts: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
         messages.push({
           role: "user",
-          content: `Your previous response was not valid JSON or did not match the required schema. Error: ${(err as Error).message}. Return ONLY the valid JSON object with no surrounding text.`
+          content: `Your previous response was not valid JSON or did not match the required schema. Error: ${
+            error instanceof Error ? error.message : String(error)
+          }. Return ONLY the valid JSON object with no surrounding text.`,
         });
       }
     }
 
-    // Check if artifact already exists for this nodeId (idempotency check)
-    const existing = await prisma.artifact.findFirst({ where: { nodeId } });
+    const existing = await prisma.artifact.findUnique({ where: { nodeId } });
     if (existing) {
       artifactId = existing.id;
     } else if (nodeConfig.outputArtifactType && parsedContent) {
       const artifact = await createArtifact({
         projectId,
-        workflowId,
+        workflowId: input.workflowId,
         executionId,
         nodeId,
         type: nodeConfig.outputArtifactType,
         producedBy: nodeConfig.nodeType,
         content: parsedContent,
+        validationStatus: "VALID",
       });
       artifactId = artifact.id;
     }
 
-    // Mark node COMPLETED
-    await prisma.node.update({
-      where: { id: nodeId },
-      data: { status: NodeStatus.COMPLETED },
-    });
-
-    await prisma.runtimeEvent.create({
-      data: {
-        executionId,
-        nodeId,
-        type: "node.completed",
-        payload: { nodeId, type: nodeConfig.nodeType },
-      },
-    });
-
-    // Fire inngest event
-    await inngest.send({
-      name: "node/completed",
-      data: {
-        projectId,
-        userId,
-        workflowId,
-        executionId,
-        nodeType: nodeConfig.nodeType,
-        outputArtifactId: artifactId,
-        outputArtifactType: nodeConfig.outputArtifactType,
-        prompt,
-      },
-    });
-
+    await markNodeCompleted(executionId, nodeId, nodeConfig.nodeType, artifactId);
   } else {
-    // 4. Tool call flow (FE/BE)
     let iterations = 0;
     const maxIterations = nodeConfig.maxIterations || 20;
-
-    let currentContext = { currentTask: prompt, iteration: 0, scratchpad: [] as string[] };
+    const currentContext = {
+      currentTask: prompt,
+      iteration: 0,
+      scratchpad: [] as string[],
+    };
     const toolHistory: Array<{
       role: "assistant" | "tool";
       content: string | null;
@@ -182,141 +278,136 @@ export async function executeNode(input: ExecuteNodeInput): Promise<ExecuteNodeR
       tool_call_id?: string;
     }> = [];
 
-    const promptEmbedding = await getEmbeddings(prompt);
-    
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
-      include: {
-        files: { select: { id: true, path: true, embeddingStatus: true } }
-      }
+    const promptEmbedding = await resolvePromptEmbedding({
+      prompt,
+      enabled: nodeConfig.contextConfig.includeVectorSearch,
+      executionId,
+      nodeId,
+      nodeType: nodeConfig.nodeType,
     });
-    const files = project?.files ?? [];
 
-    const dbMessages = await prisma.message.findMany({
-      where: { projectId, phase: MessagePhase.BUILD },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-      select: { role: true, content: true },
-    });
-    const reversedMessages = dbMessages.reverse();
+    let markedComplete = false;
 
     while (iterations < maxIterations) {
       iterations++;
-
-      const request = await buildNodeContext({
-        projectId,
+      const request = await requestNodeContext(
+        { projectId, executionId, nodeId },
         nodeConfig,
         prompt,
-        promptEmbedding,
-        files,
-        messages: reversedMessages,
-        toolHistory,
-        currentContext,
-        inputArtifactContent,
-      });
+        { toolHistory, currentContext, promptEmbedding },
+      );
 
       const response = await callLLM(request, tools);
-      const message = response.choices?.[0]?.message;
-      if (!message) break;
+      await recordUsage(executionId, nodeId, nodeConfig.nodeType, response);
+      if (!response.content && response.toolCalls.length === 0) break;
 
       toolHistory.push({
         role: "assistant",
-        content: message.content,
-        tool_calls: message.tool_calls || undefined,
+        content: response.content,
+        tool_calls: response.toolCalls.map((call) => ({
+          id: call.id,
+          type: "function" as const,
+          function: { name: call.name, arguments: call.arguments },
+        })),
       });
 
-      if (!message.tool_calls || message.tool_calls.length === 0) break;
+      if (response.toolCalls.length === 0) break;
 
-      let shouldBreak = false;
+      for (const toolCall of response.toolCalls) {
+        let args: Record<string, string>;
+        try {
+          args = JSON.parse(toolCall.arguments) as Record<string, string>;
+        } catch {
+          toolHistory.push({
+            role: "tool",
+            content: "Error: tool arguments were not valid JSON",
+            tool_call_id: toolCall.id,
+          });
+          continue;
+        }
 
-      for (const tool_call of message.tool_calls) {
         await prisma.runtimeEvent.create({
           data: {
             executionId,
             nodeId,
             type: "tool.called",
             payload: {
-              tool: tool_call.function.name,
-              args: JSON.parse(tool_call.function.arguments),
+              tool: toolCall.name,
               iteration: iterations,
             },
           },
         });
 
-        if (tool_call.function.name === "mark_complete") {
-          const args = JSON.parse(tool_call.function.arguments);
-          await executeTool("mark_complete", args, projectId, userId, executionId, nodeId);
+        if (toolCall.name === "mark_complete") {
+          await executeTool(
+            "mark_complete",
+            args,
+            projectId,
+            input.userId,
+            executionId,
+            nodeId,
+          );
           await handleToolCompletion(executionId, nodeId, {
             tool: "mark_complete",
             result: "completed",
             iteration: iterations,
           });
-          toolHistory.push({ role: "tool", content: "completed", tool_call_id: tool_call.id });
-          shouldBreak = true;
-          continue;
+          toolHistory.push({
+            role: "tool",
+            content: "completed",
+            tool_call_id: toolCall.id,
+          });
+          markedComplete = true;
+          break;
         }
 
-        const args = JSON.parse(tool_call.function.arguments);
-        const toolResult = await executeTool(tool_call.function.name, args, projectId, userId, executionId, nodeId);
+        const toolResult = await executeTool(
+          toolCall.name,
+          args,
+          projectId,
+          input.userId,
+          executionId,
+          nodeId,
+        );
+        toolHistory.push({
+          role: "tool",
+          content: toolResult,
+          tool_call_id: toolCall.id,
+        });
 
-        toolHistory.push({ role: "tool", content: toolResult, tool_call_id: tool_call.id });
-
-        const shortLog = toolResult.length > 100 ? toolResult.substring(0, 100) + "..." : toolResult;
+        const shortLog =
+          toolResult.length > 100
+            ? `${toolResult.substring(0, 100)}...`
+            : toolResult;
         await handleToolCompletion(executionId, nodeId, {
-          tool: tool_call.function.name,
+          tool: toolCall.name,
           result: shortLog,
           iteration: iterations,
         });
-
-        currentContext.scratchpad.push(`[${iterations}]: ${tool_call.function.name}() -> ${shortLog}`);
+        currentContext.scratchpad.push(
+          `[${iterations}]: ${toolCall.name}() -> ${shortLog}`,
+        );
       }
 
-      if (shouldBreak) break;
+      if (markedComplete) break;
     }
 
-    // Verify node completed status and trigger completed event
-    const nodeState = await prisma.node.findUnique({
-      where: { id: nodeId },
-    });
-
-    if (nodeState && nodeState.status !== NodeStatus.COMPLETED) {
-      await prisma.node.update({
-        where: { id: nodeId },
-        data: { status: NodeStatus.COMPLETED },
-      });
-
-      await prisma.runtimeEvent.create({
-        data: {
-          executionId,
-          nodeId,
-          type: "node.completed",
-          payload: { nodeId, type: nodeConfig.nodeType },
-        },
-      });
+    if (!markedComplete) {
+      throw new Error(
+        `${nodeConfig.nodeType} exhausted ${maxIterations} iterations without mark_complete`,
+      );
     }
 
-    await inngest.send({
-      name: "node/completed",
-      data: {
-        projectId,
-        userId,
-        workflowId,
-        executionId,
-        nodeType: nodeConfig.nodeType,
-        outputArtifactId: null,
-        outputArtifactType: null,
-        prompt,
-      },
-    });
+    await markNodeCompleted(executionId, nodeId, nodeConfig.nodeType, null);
   }
 
   return {
     artifactId,
     nodeType: nodeConfig.nodeType,
-    workflowId,
+    workflowId: input.workflowId,
     executionId,
     projectId,
-    userId,
+    userId: input.userId,
     prompt,
   };
 }

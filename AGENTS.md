@@ -1,95 +1,134 @@
-# Agent Guidelines for Doable
+# AGENTS.md — Doable
 
-## Critical Safety Rules
+Doable is a local-first AI software engineering workspace. Read this file and
+`README.md` before changing code. The checked-in code is the source of truth;
+historical PRDs describe intent, not necessarily the current implementation.
 
-### 1. Information Security
-- **NEVER log, console.error, or output:**
-  - API keys, tokens, or secrets (OpenRouter keys, Clerk tokens, database credentials)
-  - User authentication data or personal identifiable information (PII)
-  - Database connection strings or internal URLs
-  - Memory access tokens or authentication headers
-- **Only output sanitized, user-safe information** in responses and logs
-- When handling sensitive data in code, ensure variables are never passed to logging or error handlers that might expose them
-- Always use environment variables for secrets — never hardcode them
+## Current stack
 
-### 2. Code Integrity & Safety
-- **NEVER:**
-  - Override or modify existing database migrations
-  - Delete or rename critical tables, columns, or enums without migration
-  - Change authentication/authorization middleware without explicit review
-  - Modify Prisma schema constraints that would break existing data
-  - Override established API patterns (auth scoping, query optimization)
-  - Alter webhook handlers or event flows that affect data consistency
-- **ALWAYS:**
-  - Create new migrations for any schema changes
-  - Maintain backward compatibility unless explicitly breaking version
-  - Preserve existing auth checks and user-scoping logic
-  - Test changes against real data patterns
+- Next.js **16** App Router, React 19, Tailwind CSS 4.
+- Bun for scripts and tests; `bun.lock` is canonical.
+- Prisma 7 + Postgres (local `pg` adapter by default; optional Neon adapter).
+- Temporal TypeScript SDK for durable HCR orchestration.
+- Local single-user auth by default (`AUTH_MODE=local`); optional hosted Clerk
+  adapter is not in the critical path.
+- Ollama/OpenAI-compatible local models or explicitly selected OpenRouter
+  models.
 
-## Code Quality Standards
+## Architecture vocabulary
 
-### 3. Cleanliness & Readability
-- **Variable names:** Use descriptive, semantic names (`userId`, `projectContent`, not `x`, `data`)
-- **Function names:** Clearly indicate purpose (`fetchUserProjects`, `validateFileContent`)
-- **Comments:** Add context for *why*, not *what* — code should be self-documenting
-- **Line length:** Keep lines under 100 characters for readability
-- **Spacing:** Consistent indentation (2 spaces for JS/TS), blank lines between logical blocks
-- **Type safety:** Always use TypeScript types, never `any` without explicit reason and comment
+Use the `codebase-design` skill vocabulary when discussing structure:
 
-### 4. Maintainability
-- **DRY principle:** Extract reusable logic into utility functions or shared helpers
-- **Single responsibility:** Each function should do one thing well
-- **Error handling:** Use try-catch where appropriate; provide meaningful error messages
-- **Constants:** Define magic numbers/strings as named constants at module top
-- **File organization:** Group related functions in same file; separate concerns into different files
-- **Dependency management:** Keep imports organized; avoid circular dependencies
+- **Module**: anything with an interface and an implementation.
+- **Interface**: everything a caller must know, including invariants and error
+  modes.
+- **Seam**: where a module's interface lives.
+- **Adapter**: a concrete implementation at a seam.
+- **Depth**: leverage at the interface.
+- **Locality**: change and verification concentrated in one place.
 
-### 5. Extensibility
-- **Avoid hardcoding:** Use configuration, enums, and environment variables
-- **Patterns:** Follow established patterns from existing code (Zod validation, NextResponse, query scoping)
-- **Hooks/Middleware:** Use framework provided mechanisms for adding behavior
-- **Modular design:** Write code that allows features to be added without major refactoring
-- **Testing readiness:** Structure code so it can be easily unit tested
+Prefer deep modules with small interfaces. Do not add a seam unless something
+actually varies across it. Apply the deletion test before extracting a module.
 
-### 6. API & Database Patterns
-- **Auth scoping:** Every query must be scoped to authenticated user via `where: { user: { clerkId } }`
-- **Validation:** All user input validated with Zod schemas in `/lib/validations/`
-- **Responses:** Use `NextResponse.json()` with proper status codes
-- **Select fields:** Always use `.select()` to fetch only needed fields
-- **Relation queries:** Use single-level traversal: `where: { user: { clerkId } }` not nested includes
-- **Error responses:** Return consistent error shape with descriptive message and proper HTTP status
+## Runtime seams that must stay coherent
 
-## Next.js 15 Specifics
+- `src/auth` — local vs optional hosted identity.
+- `src/providers` — chat/embedding provider interface and adapters.
+- `src/runtime/state/transitions.ts` — the only failure/success/cancel/retry
+  state transition for project, workflow, execution, and node.
+- `src/runtime/artifacts` — the only artifact write path.
+- `src/runtime/files` — DB metadata + workspace bytes + embeddings.
+- `src/runtime/workspace` — path safety, atomic writes, manifest, ZIP export.
+- `src/temporal/runtime.ts` — the only build-start/cancel/retry boundary.
+- `src/hcr/context-engine` — retrieval plus pure assembly. No Inngest.
+- `src/cognition/node-executor.ts` — bounded node execution; no orchestration
+  events.
 
-<!-- BEGIN:nextjs-agent-rules -->
-## This is NOT the Next.js you know
+## Non-negotiable rules
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. **Read the relevant guide in `node_modules/next/dist/docs/` before writing any code.** Heed deprecation notices.
+1. **Do not reintroduce Inngest.** Temporal is the only orchestrator.
+2. **Do not create artifacts outside `createArtifact()`.** Revision scope is
+   per `(projectId, type)`.
+3. **Do not write project status directly in routes.** Use the state seam.
+4. **Do not pass trusted identity (`projectId`, user id, workspace root) to the
+   model.** Inject it server-side.
+5. **Do not log prompts, model output, file contents, secrets, tokens, or PII.**
+   Log IDs, event types, durations, and safe error codes.
+6. **Do not read/write the workspace without the workspace/file seam.** Paths
+   must be relative, traversal-safe, and symlink-safe.
+7. **Do not claim verification** unless the command actually ran against the
+   stated revision.
+8. **Do not run destructive database operations** (reset, truncate, drop,
+   force-pushing migrations) without explicit approval and a backup plan.
+9. **Do not silently promote a feature branch to `main`.** Fetch first; local
+   `origin/main` can be stale.
+10. **Keep generated/local data out of Git.** `.env*`, `.doable/`, raw evidence
+    dumps, PDFs, and binaries stay untracked.
 
-**Key changes in Next.js 15:**
-- App Router is the standard (no Pages Router)
-- Server Components by default (use `'use client'` sparingly)
-- Route handlers replace API routes middleware
-- Streaming and Suspense are first-class features
-- Environment variables: `NEXT_PUBLIC_*` for client, others are server-only
-<!-- END:nextjs-agent-rules -->
+## Commands
 
-## Pre-Implementation Checklist
+```bash
+bun install
+bunx prisma validate
+bunx prisma generate
+bun run typecheck
+bun test
+bun run lint
+bun run build
+bun run temporal:worker
+bun run temporal:up
+bun run temporal:down
+```
 
-Before writing code:
-- [ ] Is this change aligned with existing patterns?
-- [ ] Does it maintain auth/data scoping?
-- [ ] Are there sensitive values that could leak?
-- [ ] Is the code readable to someone unfamiliar with it?
-- [ ] Can this scale with more users/data?
-- [ ] Does this break any existing functionality?
-- [ ] Are error cases handled gracefully?
+Use `bun run prisma:migrate` only with a local/dev database and after reviewing
+the migration SQL. Never run migrations against a shared database without
+approval.
 
-## Questions?
+## Security
 
-When in doubt, refer to:
-- Existing similar implementations in the codebase
-- Type definitions in `/lib/validations/`
-- Database schema in `/prisma/schema.prisma`
-- Framework documentation in `node_modules/next/dist/docs/`
-                                                                                                                                                                                                
+- Local services bind to `127.0.0.1` by default.
+- Every query is scoped to the authenticated/local user.
+- File deletion and reads must be scoped by both project and file.
+- Validate all user input with Zod.
+- Validate tool arguments with Zod; path and size limits are mandatory.
+- Do not expose debug routes in production; the Temporal pilot route is gated.
+- Use `AUTH_MODE=hosted` only as an explicit adapter; local mode must not
+  require Clerk or a hosted database.
+
+## Code quality
+
+- Strict TypeScript; no `any` without a justified comment.
+- Small functions, explicit return types, named constants.
+- Follow existing patterns and folder conventions.
+- No giant utility files; prefer a deep module at a real seam.
+- Comments explain *why*, not *what*.
+- Keep lines under 100 characters where practical.
+- If a change touches a module interface, update its tests and docs.
+
+## Testing expectations
+
+- Pure unit tests for validators, context assembly, provider normalization,
+  state transitions, and path safety.
+- Integration tests against a disposable Postgres for discovery, artifact
+  revisions, failure recovery, and idempotency.
+- Temporal tests for fan-out/join, duplicate start, retry exhaustion,
+  cancellation, and worker restart.
+- E2E golden path: create → discovery → approve → build → inspect → export.
+
+## Before finishing a task
+
+- Run typecheck, tests, lint, and build.
+- Report exact commands and results.
+- Report unverified areas honestly.
+- Record changed files, schema migrations, and remaining risks in the handoff.
+- Do not commit secrets or generated workspaces.
+
+## Further reading
+
+- `README.md`
+- `docs/architecture/current-state.md`
+- `docs/adr/`
+- `docs/prd/`
+- `PHASE_4_PRD.md`, `PHASE_5.MD` (historical)
+- `d-2/hcr/HCR_KNOWN_CAVEATS.md`
+- `d-3/agent_configuration/`

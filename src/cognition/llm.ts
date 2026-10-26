@@ -1,35 +1,28 @@
-import { LLmMessage } from "@/src/shared/types";
+import type { LLmMessage } from "@/src/shared/types";
+import { callChat } from "@/src/providers";
+import type { ChatResult, ToolDefinition } from "@/src/providers";
 
-export async function callLLM(messages: LLmMessage[], tools: typeof import("@/lib/tools").tools) {
-   console.log("----------------Actual LLM call ----------------");
+export type { ChatResult } from "@/src/providers";
 
-   const hasTools = Array.isArray(tools) && tools.length > 0;
-   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
-      "X-Title": "Doable",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: process.env.MODEL,
-      messages,
-      ...(hasTools ? { tools, tool_choice: "auto" } : {}),
-    })
+/**
+ * Cognition-facing model call. Provider selection, timeouts, retries, and
+ * usage normalization live behind the provider seam; this function never
+ * logs prompts or model output.
+ */
+export async function callLLM(
+  messages: LLmMessage[],
+  tools: readonly ToolDefinition[],
+  options?: {
+    responseFormat?: "text" | "json";
+    timeoutMs?: number;
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+  },
+): Promise<ChatResult> {
+  return callChat({
+    messages,
+    tools: tools.length > 0 ? tools : undefined,
+    ...options,
   });
-
-  console.log("------------------deserealizing response------------");
-  let data: any;
-  try{
-    data = await response.json();
-}catch(error){
-  throw new Error(`error: ${error}`);
-}
-  
-  if (!response.ok || data.error) {
-    throw new Error(`LLM API Error (${response.status}): ${JSON.stringify(data.error || data)}`);
-  }
-  
-  return data;
 }

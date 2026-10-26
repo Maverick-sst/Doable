@@ -1,11 +1,17 @@
-import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
+import { NextResponse } from "next/server";
 
-const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)', '/api/webhooks(.*)', '/api/inngest(.*)'])
-
-export default clerkMiddleware(async (auth, request) => {
-  if (!isPublicRoute(request)) await auth.protect()
-})
+/**
+ * Local-first mode does not use a hosted identity provider. The app is
+ * expected to bind to loopback and uses a single local profile.
+ *
+ * Hosted mode is an explicit future adapter; it must not be enabled by
+ * accident. When it returns, keep the Clerk middleware in a separate module
+ * and branch on AUTH_MODE here.
+ */
+export default function proxy() {
+  return NextResponse.next();
+}
 
 export const config = {
-  matcher: ['/((?!_next|.*\\..*).*)'],
-}
+  matcher: ["/((?!_next|.*\\..*).*)"],
+};

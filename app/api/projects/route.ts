@@ -1,12 +1,14 @@
-import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { requireDbUser } from "@/lib/auth-user";
-import { ProjectDomainSchema } from "@/src/shared/validations/project-domain";
-import { ProjectStatus } from "@prisma/client";
 import { z } from "zod";
+import { ProjectStatus } from "@prisma/client";
+import { requireDbUser } from "@/lib/auth-user";
+import { prisma } from "@/lib/prisma";
+import { DomainEnum } from "@/src/shared/validations/project-domain";
 
 const CreateProjectSchema = z.object({
-  domain: ProjectDomainSchema.shape.domain,
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000).optional(),
+  domain: z.enum(DomainEnum),
 });
 
 export async function POST(request: Request) {
@@ -22,34 +24,61 @@ export async function POST(request: Request) {
 
   const validation = CreateProjectSchema.safeParse(body);
   if (!validation.success) {
-    return NextResponse.json({ error: validation.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid project payload", details: validation.error.flatten() },
+      { status: 400 },
+    );
   }
 
-  const { domain } = validation.data;
+  const { name, description, domain } = validation.data;
 
   try {
-    let projectId = "";
-
-    await prisma.$transaction(async (tx) => {
-      const project = await tx.project.create({
-        data: { name: "", userId: user.id, status: ProjectStatus.DISCOVERY },
+    const project = await prisma.$transaction(async (tx) => {
+      const created = await tx.project.create({
+        data: {
+          name,
+          description: description ?? null,
+          userId: user.id,
+          status: ProjectStatus.DISCOVERY,
+        },
       });
-      projectId = project.id;
+
+      await tx.project.update({
+        where: { id: created.id },
+        data: { workspacePath: `projects/${created.id}` },
+      });
 
       await tx.projectMemory.create({
         data: {
-          projectId: project.id,
+          projectId: created.id,
           domain,
           requirements: {},
           techStack: {},
           summary: "",
         },
       });
+
+      return created;
     });
 
-    return NextResponse.json({ projectId, message: "Project created successfully" }, { status: 201 });
-  } catch (err) {
-    console.error("Project create error:", err);
+    return NextResponse.json(
+      {
+        projectId: project.id,
+        project: {
+          id: project.id,
+          name: project.name,
+          description: project.description,
+          status: project.status,
+          createdAt: project.createdAt,
+        },
+        message: "Project created successfully",
+      },
+      { status: 201 },
+    );
+  } catch (error) {
+    console.error("Project create error:", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
@@ -60,22 +89,23 @@ export async function GET() {
 
   try {
     const projects = await prisma.project.findMany({
-      where: {
-        user: {
-          clerkId: user.clerkId,
-        },
-      },
+      where: { userId: user.id, archivedAt: null },
+      orderBy: { createdAt: "desc" },
       select: {
         id: true,
         name: true,
         description: true,
         createdAt: true,
+        updatedAt: true,
         status: true,
+        failureReason: true,
       },
     });
     return NextResponse.json({ projects }, { status: 200 });
   } catch (error) {
-    console.error("Projects list error:", error);
-    return NextResponse.json({ msg: "Internal Server Error" }, { status: 500 });
+    console.error("Projects list error:", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

@@ -4,7 +4,7 @@ import { greetWorkflow } from "../src/temporal/workflows/greetWorkflow";
 async function main() {
   const client = getTemporalClient();
   const result = await client.workflow.execute(greetWorkflow, {
-    taskQueue: "greet-task-queue",
+    taskQueue: process.env.TEMPORAL_TASK_QUEUE ?? "pilot-queue",
     args: ["World"],
     workflowId: `greet-workflow-${Date.now()}`,
   });

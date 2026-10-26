@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, v1.1/foundation]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      AUTH_MODE: local
+      DATABASE_DRIVER: pg
+      DATABASE_URL: postgresql://doable:doable@127.0.0.1:5432/doable
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+      MODEL_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://127.0.0.1:11434
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - run: bun install --frozen-lockfile
+
+      - name: Prisma validate and generate
+        run: |
+          bunx prisma validate
+          bunx prisma generate
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun test
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Production build
+        run: bun run build
+
+      - name: Secret pattern scan
+        run: |
+          if git grep -nE '(sk-[A-Za-z0-9]{20,}|OPENROUTER_API_KEY=[A-Za-z0-9_-]{20,}|CLERK_SECRET_KEY=[A-Za-z0-9_-]{20,})' -- \
+            ':!bun.lock' ':!*.md' ':!docs/**' ':!d-2/**' ':!d-3/**' ':!PHASE_*.md' ':!JOB*.md'; then
+            echo "Potential secret detected in tracked files."
+            exit 1
+          fi
+          echo "No secret patterns found."
