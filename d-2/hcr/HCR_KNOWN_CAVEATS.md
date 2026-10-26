@@ -1,3 +1,8 @@
+> **Historical migration snapshot.** Several items below (C1, C3, C4, C7,
+> C8, C11, C15, C23, C25, C26) were addressed in the V1.1 foundation. See
+> `docs/architecture/current-state.md` for the current state; this file remains
+> as migration archaeology.
+
 # HCR Known Caveats — Parked for Future Scope
 
 Source: read-only review of the current codebase (`app/inngest`, `src/cognition`,

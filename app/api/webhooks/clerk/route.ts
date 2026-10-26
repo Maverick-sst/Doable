@@ -7,7 +7,12 @@ import { WebhookEvent } from '@clerk/nextjs/server'
 import { prisma } from '@/lib/prisma'
 
 export async function POST(req: Request) {
-  console.log("webhook triggered!")
+  if (process.env.AUTH_MODE !== "hosted") {
+    return new Response("Clerk webhooks are disabled in local mode", {
+      status: 404,
+    });
+  }
+
   const WEBHOOK_SECRET = process.env.CLERK_WEBHOOK_SECRET
   if (!WEBHOOK_SECRET) throw new Error('Missing CLERK_WEBHOOK_SECRET')
 

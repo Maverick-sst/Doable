@@ -22,6 +22,7 @@ export async function retrieveRelevantFiles(
     SELECT id, path, content FROM "File"
     WHERE "projectId" = ${projectId}
       AND "embeddingStatus" = 'EMBEDDING_SUCCESSFUL'
+      AND embedding IS NOT NULL
     ORDER BY embedding <=> ${promptEmbeddingString}::vector
     LIMIT 5`;
 

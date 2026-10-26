@@ -1,0 +1,91 @@
+# Doable local-first services.
+#
+# RAM: roughly 350-650 MB total for the app database + slim Temporal stack.
+# Everything binds to 127.0.0.1 only. Use an external Postgres instead by
+# setting DATABASE_URL and omitting the doable-postgres service.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up -d
+#   docker compose -f docker-compose.local.yml ps
+#   docker compose -f docker-compose.local.yml down
+#
+# Data lives in named volumes. Removing volumes deletes local project metadata;
+# generated workspaces live under DOABLE_HOME and are not touched by `down -v`.
+
+services:
+  doable-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: doable-postgres
+    environment:
+      POSTGRES_USER: doable
+      POSTGRES_PASSWORD: doable
+      POSTGRES_DB: doable
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - doable-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doable -d doable"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  temporal-postgresql:
+    image: postgres:15-alpine
+    container_name: temporal-postgresql
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - temporal-postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  temporal-server:
+    image: temporalio/auto-setup:1.22.3
+    container_name: temporal-server
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/docker.yaml
+      - TEMPORAL_ADDRESS=temporal-server:7233
+      - TEMPORAL_CLI_ADDRESS=temporal-server:7233
+    ports:
+      - "127.0.0.1:7233:7233"
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal-server:7233 namespace list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:2.21.3
+    container_name: temporal-ui
+    depends_on:
+      temporal-server:
+        condition: service_started
+    environment:
+      - TEMPORAL_ADDRESS=temporal-server:7233
+      - TEMPORAL_CORS_ORIGINS=http://127.0.0.1:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+volumes:
+  doable-postgres-data:
+  temporal-postgresql-data:

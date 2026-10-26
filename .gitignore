@@ -1,6 +1,4 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
+# Dependencies
 /node_modules
 /.pnp
 .pnp.*
@@ -10,64 +8,55 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
-# next.js
+# Build and test output
 /.next/
 /out/
-
-# production
 /build
+/dist/
+/coverage
 
-# misc
-.DS_Store
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.local.example
 *.pem
+*.key
 
-# debug
+# Runtime data
+/DOABLE_HOME/
+/.doable/
+*.sqlite
+*.sqlite3
+
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
-# env files (can opt-in for committing if needed)
-.env
-.env.local
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
 
-# vercel
+# Vercel
 .vercel
 
-# typescript
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
 
-# prisma
+# Prisma generated client only
 /app/generated/prisma
-prisma.config.ts
-prisma/schema.prisma 
-prisma/migrations
+/prisma/generated
 
-# claude / .md files
-AGENTS.md
-AGENTS.pdf
-TEST.md
-TEST.pdf
-README.md
-README.pdf
-CLAUDE.md
-CLAUDE.pdf
-JOB.md
-JOB.pdf
-JOB_2.md
-PHASE_4_PRD.md
-PHASE_4_PRD.pdf
-PHASE_5.MD
-JOB_5.MD
+# Large binaries, PDFs, and raw evidence exports
+*.pdf
+d-*/**/temporal_ui_events/*.json
 
-
-#test-scripts
-/scripts
-/scripts/*
-/app/test/*
-
-
+# Local analysis artifacts
+/tmp/
+/.tmp/

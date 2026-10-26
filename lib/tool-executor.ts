@@ -1,211 +1,201 @@
-import { inngest } from "@/app/inngest/client";
+import { NodeStatus } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "./prisma";
-import { NodeStatus, NodeType, Prisma, } from "@prisma/client";
+import { ContentSchema, PathSchema } from "@/src/shared/validations/file";
+import {
+  createProjectFile,
+  deleteProjectFile,
+  FileConflictError,
+  FileNotFoundError,
+  readProjectFile,
+  updateProjectFile,
+} from "@/src/runtime/files";
+
+const CreateFileArgs = z.object({
+  path: PathSchema,
+  content: ContentSchema,
+});
+
+const EditFileArgs = z.object({
+  path: PathSchema,
+  old_str: z.string().max(2_000_000),
+  new_str: ContentSchema,
+});
+
+const PathArgs = z.object({ path: PathSchema });
+
+const MarkCompleteArgs = z.object({
+  summary: z.string().min(1).max(4000),
+});
+
+type ToolArgs = Record<string, unknown>;
+
+function parseArgs<T extends z.ZodTypeAny>(
+  schema: T,
+  args: unknown,
+): z.infer<T> | string {
+  const parsed = schema.safeParse(args);
+  if (!parsed.success) {
+    return `Error: Invalid tool arguments: ${parsed.error.issues
+      .map((issue) => issue.message)
+      .join("; ")}`;
+  }
+  return parsed.data;
+}
 
 export async function executeTool(
-    toolName: string,
-    args: Record<string, string>,
-    projectId: string,
-    userId: string,
-    executionId: string,
-    nodeId: string
+  toolName: string,
+  args: ToolArgs,
+  projectId: string,
+  userId: string,
+  executionId: string,
+  nodeId: string,
 ): Promise<string> {
+  await validateProjectAccess(projectId, userId);
 
-    // authenticate user + projects
-    // get project roor 
-    // tool definitions
-    await validateProjectAccess(projectId, userId);
-
-    try {
-        switch (toolName) {
-            case "create_file":
-                return await createFile(args.path, args.content, projectId);
-
-            case "edit_file":
-                return await editFile({ path: args.path, old_str: args.old_str, new_str: args.new_str }, projectId);
-
-            case "read_file":
-                return await readFile(args.path, projectId);
-
-            case "delete_file":
-                return await deleteFile(args.path, projectId);
-
-            case "mark_complete":
-                return await markComplete(args.summary, projectId, executionId, nodeId);
-
-            default:
-                throw new Error("Invalid tool name: " + toolName);
-        }
-    } catch (error: unknown) {
-        return "Error: Tool execution failed: " + (error as Error).message;
+  try {
+    switch (toolName) {
+      case "create_file": {
+        const parsed = parseArgs(CreateFileArgs, args);
+        if (typeof parsed === "string") return parsed;
+        return await createFile(parsed.path, parsed.content, projectId);
+      }
+      case "edit_file": {
+        const parsed = parseArgs(EditFileArgs, args);
+        if (typeof parsed === "string") return parsed;
+        return await editFile(parsed, projectId);
+      }
+      case "read_file": {
+        const parsed = parseArgs(PathArgs, args);
+        if (typeof parsed === "string") return parsed;
+        return await readFile(parsed.path, projectId);
+      }
+      case "delete_file": {
+        const parsed = parseArgs(PathArgs, args);
+        if (typeof parsed === "string") return parsed;
+        return await deleteFile(parsed.path, projectId);
+      }
+      case "mark_complete": {
+        const parsed = parseArgs(MarkCompleteArgs, args);
+        if (typeof parsed === "string") return parsed;
+        return await markComplete(parsed.summary, projectId, executionId, nodeId);
+      }
+      default:
+        return `Error: Invalid tool name: ${toolName}`;
     }
-
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `Error: Tool execution failed: ${message}`;
+  }
 }
 
-async function validateProjectAccess(projectId: string, userId: string): Promise<void> {
-
-    const project = await prisma.project.count({
-        where: {
-            id: projectId,
-            userId: userId
-        }
-    })
-    if (project === 0) {
-        throw new Error("Project not found or access denied");
-    }
-
+async function validateProjectAccess(
+  projectId: string,
+  userId: string,
+): Promise<void> {
+  const project = await prisma.project.count({
+    where: { id: projectId, userId },
+  });
+  if (project === 0) {
+    throw new Error("Project not found or access denied");
+  }
 }
 
-// tool handlers
-
-async function createFile(path: string, content: string, projectId: string): Promise<string> {
-
-    const file = await prisma.file.create({
-        data: {
-            path,
-            content: content ?? "",
-            projectId: projectId
-        },
-        select: {
-            id: true,
-            path: true,
-            createdAt: true,
-        },
-    });
-    // trigger inngest event to process embeddings in background
-    try {
-        await inngest.send({
-            name: "file/embedding-requested",
-            data: {
-                projectId: projectId,
-                fileId: file.id,
-                content: content ?? "",
-            }
-        })
-    } catch (error) {
-        throw new Error("Failed to send event to inngest");
-    }
-
+async function createFile(
+  path: string,
+  content: string,
+  projectId: string,
+): Promise<string> {
+  try {
+    const file = await createProjectFile({ projectId, path, content });
     return `File created successfully with id: ${file.id} and path: ${file.path}`;
-
+  } catch (error) {
+    if (error instanceof FileConflictError) {
+      return `Error: ${error.message}. Use edit_file or read_file.`;
+    }
+    throw error;
+  }
 }
 
 async function editFile(
-    args: {
-        path: string,
-        old_str: string,
-        new_str: string
-    },
-    projectId: string
+  args: { path: string; old_str: string; new_str: string },
+  projectId: string,
 ): Promise<string> {
-    // oldStr can be empty for full rewrite,
-    // if oldStr is provided, do search-replace, else full rewrite
-    const { path, old_str, new_str } = args;
-    const file = await prisma.file.findFirst({
-        where: {
-            projectId: projectId,
-            path: path
-        }
-    })
-    if (!file) {
-        return `Error: File not found at path: ${path}`;
+  const { path, old_str, new_str } = args;
+  let existing;
+  try {
+    existing = await readProjectFile({ projectId, path });
+  } catch (error) {
+    if (error instanceof FileNotFoundError) {
+      return `Error: File not found at path: ${path}`;
     }
+    throw error;
+  }
 
-    let newContent = file.content;
-    if (!old_str || old_str === "") {
-        newContent = new_str;
-    } else {
-        if (!file.content.includes(old_str)) {
-            throw new Error("old_str not found in file content");
-        }
-        newContent = file.content.replace(old_str, new_str);
+  let newContent = existing.content;
+  if (!old_str) {
+    newContent = new_str;
+  } else {
+    if (!existing.content.includes(old_str)) {
+      return "Error: old_str not found in file content";
     }
-    let updatedFile = null;
+    newContent = existing.content.replace(old_str, new_str);
+  }
 
-    updatedFile = await prisma.file.update({
-        where: {
-            projectId_path: {
-                projectId: projectId,
-                path: path,
-            }
-        },
-        data: {
-            content: newContent,
-            embeddingStatus: "EMBEDDING_PENDING",
-            updatedAt: new Date(),
-        }
-    })
-
-    // trigger inngest event to process embeddings in background
-    try {
-        await inngest.send({
-            name: "file/embedding-requested",
-            data: {
-                projectId: projectId,
-                fileId: updatedFile.id,
-                content: updatedFile.content ?? "",
-            }
-        })
-    } catch (error) {
-        throw new Error("Failed to send event to inngest");
-    }
-    return `File updated successfully at path: ${updatedFile.path}`;
-
-
-
+  const updated = await updateProjectFile({ projectId, path, content: newContent });
+  return `File updated successfully at path: ${updated.path}`;
 }
 
 async function readFile(path: string, projectId: string): Promise<string> {
-    const file = await prisma.file.findFirst({
-        where: {
-            projectId: projectId,
-            path: path
-        }
-    })
-    if (!file) {
-        return `Error: File not found at path: ${path}`;
-    }
+  try {
+    const file = await readProjectFile({ projectId, path });
     return file.content;
-}
-async function deleteFile(path: string, projectId: string): Promise<string> {
-    const file = await prisma.file.findFirst({
-        where: { projectId: projectId, path: path }
-    });
-    if (!file) {
-        return `Error: File not found at path: ${path}`;
+  } catch (error) {
+    if (error instanceof FileNotFoundError) {
+      return `Error: File not found at path: ${path}`;
     }
-    await prisma.file.delete({
-        where: {
-            projectId_path: {
-                projectId: projectId,
-                path: path
-            }
-        }
-    })
-    return `File at path ${path} deleted successfully.`;
+    throw error;
+  }
 }
 
-async function markComplete(summary: string, projectId: string, executionId: string, nodeId: string): Promise<string> {
-    await prisma.projectMemory.update({
-        where: {
-            projectId: projectId
-        },
-        data: {
-            summary: summary
-        }
-    })
+async function deleteFile(path: string, projectId: string): Promise<string> {
+  try {
+    await deleteProjectFile({ projectId, path });
+    return `File at path ${path} deleted successfully.`;
+  } catch (error) {
+    if (error instanceof FileNotFoundError) {
+      return `Error: File not found at path: ${path}`;
+    }
+    throw error;
+  }
+}
 
-    const node = await prisma.node.update({
-        where: {
-            id: nodeId
-        },
-        data: {
-            status: NodeStatus.COMPLETED
-        }
-    })
+async function markComplete(
+  summary: string,
+  projectId: string,
+  executionId: string,
+  nodeId: string,
+): Promise<string> {
+  await prisma.projectMemory.update({
+    where: { projectId },
+    data: { summary },
+  });
+
+  const changed = await prisma.node.updateMany({
+    where: { id: nodeId, status: { not: NodeStatus.COMPLETED } },
+    data: { status: NodeStatus.COMPLETED, finishedAt: new Date() },
+  });
+
+  if (changed.count > 0) {
     await prisma.runtimeEvent.create({
-        data: { executionId: executionId, nodeId: nodeId, type: "node.completed", payload: { nodeId: nodeId, type: node.type } },
+      data: {
+        executionId,
+        nodeId,
+        type: "node.completed",
+        payload: { nodeId, summary },
+      },
+    });
+  }
 
-    })
-    return `Project marked complete with summary.`;
+  return "Work marked complete with summary.";
 }

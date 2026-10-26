@@ -1,14 +1,13 @@
 import { ApplicationFailure, Context } from "@temporalio/activity";
-import {
-  NodeType,
-  WorkflowStatus,
-  ExecutionStatus,
-  NodeStatus,
-} from "@prisma/client";
+import { NodeStatus, NodeType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AGENT_REGISTRY } from "@/src/cognition/agent-registry";
 import { executeNode } from "@/src/cognition/node-executor";
 import { HCR_TRANSITION_MAP } from "@/src/runtime/workflows/hcr/transition-map";
+import {
+  completeExecution,
+  failExecution,
+} from "@/src/runtime/state/transitions";
 import type {
   TemporalHcrActivityInput,
   ValidatedHcrContext,
@@ -206,14 +205,13 @@ export async function runHcrNodeBoundary(
  * Why an Activity: LLM calls, embeddings, Prisma writes, and file I/O are
  * non-deterministic side effects forbidden in Workflows.
  *
- * Inngest suppression: `executeNode` is invoked with `emitCompletionEvent:false`
- * so the Temporal path does not also fire `node/completed` into the Inngest
- * coordinator (which would fork sequencing). The Inngest path keeps the default
- * true and is behaviorally unchanged.
+ * Temporal owns sequencing; `executeNode` no longer emits orchestration
+ * events into a second orchestrator. Node completion is persisted to Postgres and the
+ * workflow coordinator port decides the next step.
  *
  * Retry safety: relies on the existing `artifact.findFirst({nodeId})` reuse —
  * a retried Activity reuses the same artifact instead of creating a duplicate.
- * LIMITATION (documented, not fixed here to avoid changing Inngest behavior):
+ * LIMITATION (historical, now partly addressed by the state seam):
  * `execution.running` / `node.running` / `node.completed` events are
  * unconditional creates, so a Temporal retry can duplicate those events while
  * artifact state stays single. Agent 04 verifies this explicitly.
@@ -259,7 +257,7 @@ export async function runArchitectNode(
  * (FRONTEND_ENG, BACKEND_ENG) uniformly — `executeNode` already branches on
  * `outputMode`, so no per-node code is needed.
  *
- * Inngest suppression, retry safety (artifact reuse by `nodeId`), and failure
+ * Orchestration suppression, retry safety (artifact reuse by `nodeId`), and failure
  * classification behave exactly as documented on `runArchitectNode`.
  * Known parked caveats (HCR_KNOWN_CAVEATS.md): C2 duplicate events on retry,
  * C5 file-write idempotency for FE/BE.
@@ -318,7 +316,6 @@ export async function runHcrNodeActivity(
         prompt,
         inputArtifactId: inputArtifactId ?? null,
         nodeConfig,
-        emitCompletionEvent: false,
       }),
     );
   } catch (error) {
@@ -344,14 +341,14 @@ export async function runHcrNodeActivity(
 /**
  * Coordinator port: decides the next step after one node completes.
  *
- * Mirrors `app/inngest/functions/workflow-coordinator.ts` decision-for-decision
+ * Ports the former coordinator decision-for-decision
  * (`HCR_TRANSITION_MAP` lookup, parallel wait-for-peer guard, terminal
- * finalize) but performs NO Inngest sends — it returns the decision and lets
+ * finalize) but performs no event sends — it returns the decision and lets
  * the workflow drive the next Activities. Creates next `Node(CREATED)` rows +
  * `node.created` events exactly like the coordinator.
  *
- * Parity note: like the Inngest coordinator, spawned-node creation carries no
- * dedup key (parked caveat C3). The Inngest coordinator is untouched.
+ * Parity note: like the former coordinator, spawned-node creation carries no
+ * dedup key (parked caveat C3). The former coordinator is retired.
  */
 export async function createNextHcrNodes(
   input: CreateNextHcrNodesInput,
@@ -378,23 +375,54 @@ export async function createNextHcrNodes(
 
   const nextNodes = [];
   for (const nodeType of transition.nextNodes) {
-    const node = await prisma.node.create({
-      data: {
-        executionId,
-        type: nodeType,
-        status: NodeStatus.CREATED,
-        order: transition.order,
-      },
+    // Deterministic graph identity: a retried coordinator call reuses the
+    // node instead of forking the graph. The unique index backs the race.
+    let node = await prisma.node.findFirst({
+      where: { executionId, order: transition.order, type: nodeType },
     });
 
-    await prisma.runtimeEvent.create({
-      data: {
-        executionId,
-        nodeId: node.id,
-        type: "node.created",
-        payload: { nodeId: node.id, type: nodeType, nodeType },
-      },
-    });
+    if (!node) {
+      try {
+        node = await prisma.node.create({
+          data: {
+            executionId,
+            type: nodeType,
+            status: NodeStatus.CREATED,
+            order: transition.order,
+          },
+        });
+        await prisma.runtimeEvent.create({
+          data: {
+            executionId,
+            nodeId: node.id,
+            type: "node.created",
+            payload: {
+              nodeId: node.id,
+              type: nodeType,
+              nodeType,
+              order: transition.order,
+            },
+          },
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        ) {
+          node = await prisma.node.findFirst({
+            where: { executionId, order: transition.order, type: nodeType },
+          });
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (!node) {
+      throw new Error(
+        `Could not create or find ${nodeType} node at order ${transition.order}`,
+      );
+    }
 
     nextNodes.push({
       nodeId: node.id,
@@ -410,9 +438,9 @@ export async function createNextHcrNodes(
  * Finalize port: mirrors `finalizeWorkflow` (execution/workflow COMPLETED,
  * project IDLE, `execution.completed` + `workflow.completed` events).
  *
- * Unlike the Inngest original, writes are conditional (transition-guarded) so
+ * Unlike the former implementation, writes are conditional (transition-guarded) so
  * a retried or twice-reached finalize marks COMPLETED exactly once without
- * duplicating completion events. The Inngest path is untouched.
+ * duplicating completion events.
  */
 export async function finalizeHcrSlice(
   input: FinalizeHcrSliceInput,
@@ -420,36 +448,13 @@ export async function finalizeHcrSlice(
   const { identity } = input;
   const { workflowId, executionId, projectId } = identity;
 
-  const finalized = await prisma.$transaction(async (tx) => {
-    const finalizedExecution = await tx.execution.updateMany({
-      where: { id: executionId, status: { not: ExecutionStatus.COMPLETED } },
-      data: { status: ExecutionStatus.COMPLETED },
-    });
-    const finalizedWorkflow = await tx.workflow.updateMany({
-      where: { id: workflowId, status: { not: WorkflowStatus.COMPLETED } },
-      data: { status: WorkflowStatus.COMPLETED },
-    });
-
-    const transitioned =
-      finalizedExecution.count > 0 || finalizedWorkflow.count > 0;
-
-    if (transitioned) {
-      await tx.project.update({
-        where: { id: projectId },
-        data: { status: "IDLE" },
-      });
-      await tx.runtimeEvent.createMany({
-        data: [
-          { executionId, type: "execution.completed", payload: { executionId } },
-          { executionId, type: "workflow.completed", payload: { workflowId } },
-        ],
-      });
-    }
-
-    return transitioned;
+  const result = await completeExecution({
+    projectId,
+    workflowId,
+    executionId,
   });
 
-  return { doableExecutionId: executionId, finalized };
+  return { doableExecutionId: executionId, finalized: result.transitioned };
 }
 
 /**
@@ -457,7 +462,7 @@ export async function finalizeHcrSlice(
  *
  * Mirrors `lib/handleFailure` row-for-row (workflow/execution/node → FAILED +
  * `workflow.failed` / `execution.failed` / `node.failed` events) so the
- * Temporal terminal state is inspectable exactly like the Inngest one.
+ * Temporal terminal state is inspectable in the same product shape as before.
  * Parity note: like `handleFailure`, it does NOT touch `Project` — a failed
  * run leaves the project IN_PROGRESS in both orchestrators.
  *
@@ -467,7 +472,7 @@ export async function finalizeHcrSlice(
  * were already FAILED.
  *
  * Only the Temporal workflow calls this (on node-activity exhaustion). The
- * Inngest `onFailure → handleFailure` path is untouched.
+ * The former `onFailure → handleFailure` path is retired.
  */
 export async function markHcrFailed(
   input: MarkHcrFailedActivityInput,
@@ -482,50 +487,18 @@ export async function markHcrFailed(
     );
   }
 
-  const markedFailed = await prisma.$transaction(async (tx) => {
-    const failedWorkflow = await tx.workflow.updateMany({
-      where: { id: workflowId, status: { not: WorkflowStatus.FAILED } },
-      data: { status: WorkflowStatus.FAILED },
-    });
-    const failedExecution = await tx.execution.updateMany({
-      where: { id: executionId, status: { not: ExecutionStatus.FAILED } },
-      data: { status: ExecutionStatus.FAILED },
-    });
-    const failedNode = await tx.node.updateMany({
-      where: { id: nodeId, status: { not: NodeStatus.FAILED } },
-      data: { status: NodeStatus.FAILED },
-    });
-
-    const transitioned =
-      failedWorkflow.count > 0 ||
-      failedExecution.count > 0 ||
-      failedNode.count > 0;
-
-    if (transitioned) {
-      await tx.runtimeEvent.createMany({
-        data: [
-          {
-            executionId,
-            type: "workflow.failed",
-            payload: { workflowId, source: "temporal", reason },
-          },
-          {
-            executionId,
-            type: "execution.failed",
-            payload: { executionId, source: "temporal", reason },
-          },
-          {
-            executionId,
-            nodeId,
-            type: "node.failed",
-            payload: { nodeId, source: "temporal", reason },
-          },
-        ],
-      });
-    }
-
-    return transitioned;
+  const result = await failExecution({
+    projectId: identity.projectId,
+    workflowId,
+    executionId,
+    nodeId,
+    reason,
+    code: "unknown",
   });
 
-  return { doableExecutionId: executionId, doableNodeId: nodeId, markedFailed };
+  return {
+    doableExecutionId: executionId,
+    doableNodeId: nodeId,
+    markedFailed: result.transitioned,
+  };
 }

@@ -1,0 +1,298 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ProjectStatus {
+  DISCOVERY
+  PENDING
+  IN_PROGRESS
+  IDLE
+  FAILED
+}
+
+enum MessagePhase {
+  DISCOVERY
+  BUILD
+}
+
+enum Role {
+  USER
+  ASSISTANT
+}
+
+enum EmbeddingStatus {
+  EMBEDDING_PENDING
+  EMBEDDING_PROCESSING
+  EMBEDDING_SUCCESSFUL
+  EMBEDDING_RETRYING
+  EMBEDDING_FAILED
+}
+
+enum WorkflowType {
+  DISCOVERY
+  HCR
+  VERIFICATION
+  REPAIR
+}
+
+enum WorkflowStatus {
+  CREATED
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ExecutionStatus {
+  CREATED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum NodeType {
+  DISCOVERY
+  ARCHITECT
+  RESEARCH
+  PRD_REVIEWER
+  PLANNER
+  FRONTEND_ENG
+  BACKEND_ENG
+  WORKER
+  TEST_DESIGNER
+  QA
+  REPAIR
+}
+
+enum ArtifactType {
+  DISCOVERY_REQUIREMENT
+  ARCHITECTURE_SPEC
+  RESEARCH_DOSSIER
+  APPROVED_PRD
+  EXECUTION_PLAN
+  VERIFICATION_REPORT
+}
+
+enum VerificationStatus {
+  NOT_RUN
+  RUNNING
+  PASSED
+  FAILED
+  TIMED_OUT
+  BLOCKED
+}
+
+enum NodeStatus {
+  CREATED
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum ProjectDomain {
+  FULL_STACK_APPLICATION
+  LANDING_PAGE
+}
+
+model Message {
+  id          String       @id @default(cuid())
+  role        Role
+  content     String       @db.Text
+  createdAt   DateTime     @default(now())
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase       MessagePhase @default(BUILD)
+  workflowId  String?
+  executionId String?
+
+  @@index([projectId, phase, createdAt])
+}
+
+model User {
+  id        String    @id @default(cuid())
+  clerkId   String    @unique
+  email     String    @unique
+  createdAt DateTime  @default(now())
+  projects  Project[]
+}
+
+model Project {
+  id            String         @id @default(cuid())
+  name          String
+  description   String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  status        ProjectStatus  @default(DISCOVERY)
+  failureReason String?        @db.Text
+  archivedAt    DateTime?
+  workspacePath String?
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files         File[]
+  messages      Message[]
+  workflows     Workflow[]
+  memory        ProjectMemory?
+  artifacts     Artifact[]
+  verifications VerificationReport[]
+
+  @@index([userId, status])
+}
+
+model File {
+  id              String          @id @default(cuid())
+  path            String
+  content         String          @db.Text
+  checksum        String?
+  revision        Int             @default(1)
+  size            Int?
+  mimeType        String?
+  embedding       Unsupported("vector(768)")?
+  embeddingStatus EmbeddingStatus @default(EMBEDDING_PENDING)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  projectId       String
+  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, path])
+  @@index([projectId, updatedAt])
+}
+
+model Workflow {
+  id         String         @id @default(cuid())
+  projectId  String
+  project    Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type       WorkflowType
+  status     WorkflowStatus @default(CREATED)
+  executions Execution[]
+  artifacts  Artifact[]
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+}
+
+model Execution {
+  id                 String          @id @default(cuid())
+  workflowId         String
+  workflow           Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  status             ExecutionStatus @default(CREATED)
+  retryCount         Int             @default(0)
+  temporalWorkflowId String?
+  temporalRunId      String?
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  failureReason      String?         @db.Text
+  nodes              Node[]
+  events             RuntimeEvent[]
+  artifacts          Artifact[]
+  verifications      VerificationReport[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([status, updatedAt])
+}
+
+model Node {
+  id            String         @id @default(cuid())
+  executionId   String
+  execution     Execution      @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  parentNodeId  String?
+  parentNode    Node?          @relation("NodeWorkers", fields: [parentNodeId], references: [id])
+  childNode     Node[]         @relation("NodeWorkers")
+  type          NodeType
+  status        NodeStatus     @default(CREATED)
+  order         Int
+  attempt       Int            @default(0)
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  failureReason String?        @db.Text
+  events        RuntimeEvent[]
+  artifacts     Artifact[]
+  verifications VerificationReport[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([executionId, order, type])
+  @@index([executionId, status])
+}
+
+model Artifact {
+  id               String      @id @default(cuid())
+  projectId        String
+  workflowId       String
+  executionId      String?
+  nodeId           String?     @unique
+  type             ArtifactType
+  version          Int
+  schemaVersion    Int         @default(1)
+  validationStatus String      @default("VALID")
+  contentHash      String?
+  producedBy       NodeType
+  content          Json
+  metadata         Json?
+  parentArtifactId String?
+  parentArtifact   Artifact?   @relation("ArtifactVersions", fields: [parentArtifactId], references: [id])
+  childArtifacts   Artifact[]  @relation("ArtifactVersions")
+  project          Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workflow         Workflow    @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  execution        Execution?  @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  node             Node?       @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  createdAt        DateTime    @default(now())
+
+  @@unique([projectId, type, version])
+  @@index([projectId, type, createdAt])
+}
+
+model RuntimeEvent {
+  id          String    @id @default(cuid())
+  executionId String
+  execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  nodeId      String?
+  node        Node?     @relation(fields: [nodeId], references: [id])
+  type        String
+  payload     Json?
+  createdAt   DateTime  @default(now())
+}
+
+model ProjectMemory {
+  id           String        @id @default(cuid())
+  projectId    String        @unique
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  domain       ProjectDomain
+  requirements Json
+  techStack    Json
+  summary      String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model VerificationReport {
+  id          String             @id @default(cuid())
+  projectId   String
+  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  executionId String?
+  execution   Execution?         @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  nodeId      String?
+  node        Node?              @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  status      VerificationStatus @default(NOT_RUN)
+  command     String?            @db.Text
+  exitCode    Int?
+  durationMs  Int?
+  output      String?            @db.Text
+  revision    String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([projectId, createdAt])
+}

@@ -16,6 +16,13 @@ const TriggerPilotSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.ENABLE_TEMPORAL_PILOT !== "true"
+  ) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const { user, error } = await requireDbUser();
   if (error) return error;
 

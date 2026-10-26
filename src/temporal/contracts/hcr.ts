@@ -12,7 +12,7 @@ import type { ArtifactType, NodeType } from "@prisma/client";
 /** Input to the Temporal HCR workflow (first-node slice: ARCHITECT). */
 export interface TemporalHcrWorkflowInput {
   identity: DoableIdentity;
-  /** Original user prompt, threaded unchanged like the Inngest path. */
+  /** Original user prompt, threaded unchanged like the previous path. */
   prompt: string;
   /** Explicit input artifact; null for the first node (resolves latest DISCOVERY_REQUIREMENT). */
   inputArtifactId?: string | null;
@@ -72,10 +72,8 @@ export interface TemporalHcrResult {
  * Temporal with this ID. A repeated trigger with the same executionId maps to
  * the same Temporal workflow instead of a second product execution.
  *
- * DECISION POINT for Agent 03/04: current Inngest path has NO dedup (each POST
- * creates a new execution). If strict parity is required, the trigger must keep
- * creating new executionIds. If fork-prevention is desired, the trigger should
- * reuse this ID with `WorkflowIdReusePolicy`. Do not decide here — mark only.
+ * The previous path had no trigger dedup. The current start seam locks one
+ * active build per project in Postgres before Temporal starts.
  */
 export function buildHcrWorkflowId(identity: DoableIdentity): string {
   return `hcr-${identity.executionId}`;
@@ -111,6 +109,7 @@ export interface ArchitectNodeActivityResult {
 export function isHcrDomainFailure(message: string): boolean {
   return (
     message.includes("Failed to parse/validate JSON") ||
+    message.includes("without mark_complete") ||
     message.includes("not found") ||
     message.includes("does not belong")
   );
@@ -173,7 +172,7 @@ export interface CreateNextHcrNodesInput {
 export interface CreateNextHcrNodesResult {
   /** `spawn` → run `nextNodes`; `finalize` → run finalize activity once;
    *  `wait` → a parallel peer is still running (unreachable in the joined
-   *  full-graph loop; kept for Inngest semantic parity). */
+   *  full-graph loop; kept for coordinator semantic parity). */
   action: "spawn" | "finalize" | "wait";
   nextNodes: SpawnedHcrNode[];
 }

@@ -1,3 +1,7 @@
+> Historical pilot notes. The current application is Temporal-only and uses
+> `docker-compose.local.yml`; see the root `README.md` and
+> `docs/architecture/current-state.md` for the current setup.
+
 # Temporal Local Development
 
 This directory contains the Temporal client, worker, workflows, and activities for the Doable pilot integration.

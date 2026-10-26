@@ -5,6 +5,8 @@
 declare module "bun:test" {
   export function describe(name: string, fn: () => void): void;
   export function test(name: string, fn: () => void | Promise<void>): void;
+  export function afterEach(fn: () => void | Promise<void>): void;
+  export function beforeEach(fn: () => void | Promise<void>): void;
   export interface Matchers {
     toBe(expected: unknown): void;
     toEqual(expected: unknown): void;
@@ -12,7 +14,7 @@ declare module "bun:test" {
     toBeNull(): void;
     toBeGreaterThan(expected: number): void;
     toContain(expected: unknown): void;
-    toThrow(expected?: string | Function): void;
+    toThrow(expected?: string | RegExp | (new (...args: never[]) => Error)): void;
     not: {
       toBe(expected: unknown): void;
       toBeNull(): void;

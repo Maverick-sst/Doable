@@ -22,7 +22,7 @@ const { validateHcrContext } = wf.proxyActivities<
 // runHcrNodeActivity docs for the known duplicate-event limitation.
 // Heartbeats (30s interval, 120s timeout) renew the lease while the provider
 // is slow-but-alive, so only genuinely dead workers time out. Parity on
-// retry count with the Inngest node `retries:3` is unchanged.
+// retry count remains 3 for parity with the former node functions.
 const { runHcrNodeActivity } = wf.proxyActivities<
   typeof import("../activities/hcrActivities")
 >({
@@ -79,13 +79,13 @@ interface PendingNode {
  * validate → run pending nodes (concurrently on fan-out) → coordinate →
  * repeat until finalize.
  *
- * Mirrors the Inngest graph exactly (`HCR_TRANSITION_MAP`: ARCHITECT →
+ * Mirrors the HCR transition graph exactly (`HCR_TRANSITION_MAP`: ARCHITECT →
  * RESEARCH → PRD_REVIEWER → PLANNER → FRONTEND_ENG + BACKEND_ENG in parallel
  * → finalize). The workflow stops issuing work only when the coordinator
  * port says `finalize` (then one guarded finalize call) or `wait` (a peer
  * still running — unreachable in this joined loop, kept for parity).
  *
- * Failure parity with Inngest (`onFailure → handleFailure`): when node
+ * Failure parity with the former `onFailure` handler: when node
  * activities exhaust their retries, each failed node is compensated with
  * its OWN identity via `markHcrFailed` (a prior version compensated the
  * trigger node instead — mis-marking ARCHITECT for a PLANNER failure), then
@@ -125,6 +125,8 @@ export async function hcrWorkflow(
   let lastArtifactId: string | null = null;
   let lastArtifactType: string | null = null;
   let lastNodeType = validated.nodeType;
+  let finalStatus = validated.executionStatus;
+  let compensatedNodeFailure = false;
 
   try {
     while (pending.length > 0) {
@@ -164,6 +166,7 @@ export async function hcrWorkflow(
             reason,
           });
         }
+        compensatedNodeFailure = true;
         throw failures[0].error;
       }
 
@@ -209,9 +212,14 @@ export async function hcrWorkflow(
           }
         } else if (decision.action === "finalize") {
           finalizeRequested = true;
+        } else {
+          // The batch joins every spawned node before coordinating, so a
+          // `wait` decision here violates the graph invariant. Surface it
+          // instead of silently dropping a coordinator state.
+          throw new Error(
+            `Coordinator returned wait after a joined ${result.nodeType} batch`,
+          );
         }
-        // `wait`: a parallel peer still running — unreachable here because
-        // the batch joins all spawned nodes before coordinating. Ignored.
       }
 
       if (nextPending.length > 0) {
@@ -219,16 +227,19 @@ export async function hcrWorkflow(
       } else {
         if (finalizeRequested) {
           await finalizeHcrSlice({ identity: baseIdentity });
+          finalStatus = "COMPLETED";
         }
         pending = [];
       }
     }
   } catch (error) {
-    // Reachable only for non-node failures (validation already returned
-    // above; coordinator/finalize failures land here): compensate the
-    // trigger node as a last resort so the run never fails silently.
-    const reason = error instanceof Error ? error.message : String(error);
-    await markHcrFailed({ identity: baseIdentity, reason });
+    // Node failures are already attributed to the failing node above. This
+    // catch is for coordinator/finalize/transport failures, which have no
+    // better node to attribute; compensate the trigger node once.
+    if (!compensatedNodeFailure) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await markHcrFailed({ identity: baseIdentity, reason });
+    }
     throw error;
   }
 
@@ -237,7 +248,7 @@ export async function hcrWorkflow(
     doableWorkflowId: validated.doableWorkflowId,
     doableExecutionId: validated.doableExecutionId,
     doableNodeId: lastNodeId,
-    executionStatus: validated.executionStatus,
+    executionStatus: finalStatus,
     nodeMigrated: true,
     temporalWorkflowId: wf.workflowInfo().workflowId,
     artifactId: lastArtifactId,

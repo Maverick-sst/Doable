@@ -1,5 +1,6 @@
-import { SignIn } from '@clerk/nextjs'
+import { redirect } from "next/navigation";
 
-export default function Page(){
-    return <SignIn />
+/** Local-first mode has one profile; there is nothing to sign in to. */
+export default function LocalSignInPage() {
+  redirect("/dashboard");
 }
