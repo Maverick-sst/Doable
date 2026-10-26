@@ -1,4 +1,5 @@
-import { NodeStatus } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { NodeStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "./prisma";
 import { ContentSchema, PathSchema } from "@/src/shared/validations/file";
@@ -43,6 +44,46 @@ function parseArgs<T extends z.ZodTypeAny>(
   return parsed.data;
 }
 
+const MAX_STORED_RESULT_CHARS = 4000;
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(",")}}`;
+}
+
+/**
+ * Stable key for one tool call.
+ *
+ * Derived from execution, node, turn, tool and argument hash, so an activity
+ * retry that replays the same turn does not execute the tool twice.
+ */
+export function createToolCallKey(input: {
+  executionId: string;
+  nodeId: string;
+  turn: number;
+  toolName: string;
+  args: unknown;
+}): string {
+  return createHash("sha256")
+    .update(
+      [
+        input.executionId,
+        input.nodeId,
+        String(input.turn),
+        input.toolName,
+        stableStringify(input.args),
+      ].join("|"),
+    )
+    .digest("hex");
+}
+
 export async function executeTool(
   toolName: string,
   args: ToolArgs,
@@ -50,42 +91,128 @@ export async function executeTool(
   userId: string,
   executionId: string,
   nodeId: string,
+  turn = 0,
 ): Promise<string> {
   await validateProjectAccess(projectId, userId);
 
-  try {
-    switch (toolName) {
-      case "create_file": {
-        const parsed = parseArgs(CreateFileArgs, args);
-        if (typeof parsed === "string") return parsed;
-        return await createFile(parsed.path, parsed.content, projectId);
+  const idempotencyKey = createToolCallKey({
+    executionId,
+    nodeId,
+    turn,
+    toolName,
+    args,
+  });
+
+  const previous = await prisma.toolCall.findUnique({
+    where: { idempotencyKey },
+  });
+
+  if (previous?.status === "SUCCEEDED") {
+    return previous.result ?? "";
+  }
+
+  if (!previous) {
+    try {
+      await prisma.toolCall.create({
+        data: {
+          executionId,
+          nodeId,
+          idempotencyKey,
+          tool: toolName,
+          argumentsHash: createHash("sha256")
+            .update(stableStringify(args))
+            .digest("hex"),
+          status: "STARTED",
+        },
+      });
+    } catch (error) {
+      if (
+        !(
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        )
+      ) {
+        throw error;
       }
-      case "edit_file": {
-        const parsed = parseArgs(EditFileArgs, args);
-        if (typeof parsed === "string") return parsed;
-        return await editFile(parsed, projectId);
-      }
-      case "read_file": {
-        const parsed = parseArgs(PathArgs, args);
-        if (typeof parsed === "string") return parsed;
-        return await readFile(parsed.path, projectId);
-      }
-      case "delete_file": {
-        const parsed = parseArgs(PathArgs, args);
-        if (typeof parsed === "string") return parsed;
-        return await deleteFile(parsed.path, projectId);
-      }
-      case "mark_complete": {
-        const parsed = parseArgs(MarkCompleteArgs, args);
-        if (typeof parsed === "string") return parsed;
-        return await markComplete(parsed.summary, projectId, executionId, nodeId);
-      }
-      default:
-        return `Error: Invalid tool name: ${toolName}`;
     }
+  }
+
+  try {
+    const result = await dispatchTool({
+      toolName,
+      args,
+      projectId,
+      userId,
+      executionId,
+      nodeId,
+      idempotencyKey,
+    });
+
+    await prisma.toolCall.updateMany({
+      where: { idempotencyKey },
+      data: {
+        status: result.startsWith("Error:") ? "FAILED" : "SUCCEEDED",
+        result: result.slice(0, MAX_STORED_RESULT_CHARS),
+        errorCode: result.startsWith("Error:") ? "tool_error" : null,
+        finishedAt: new Date(),
+      },
+    });
+
+    return result;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    await prisma.toolCall.updateMany({
+      where: { idempotencyKey },
+      data: {
+        status: "FAILED",
+        errorCode: "exception",
+        finishedAt: new Date(),
+      },
+    });
     return `Error: Tool execution failed: ${message}`;
+  }
+}
+
+async function dispatchTool(input: {
+  toolName: string;
+  args: ToolArgs;
+  projectId: string;
+  userId: string;
+  executionId: string;
+  nodeId: string;
+  idempotencyKey: string;
+}): Promise<string> {
+  const { toolName, args, projectId, executionId, nodeId, idempotencyKey } =
+    input;
+
+  switch (toolName) {
+    case "create_file": {
+      const parsed = parseArgs(CreateFileArgs, args);
+      if (typeof parsed === "string") return parsed;
+      return await createFile(parsed.path, parsed.content, projectId, idempotencyKey);
+    }
+    case "edit_file": {
+      const parsed = parseArgs(EditFileArgs, args);
+      if (typeof parsed === "string") return parsed;
+      return await editFile(parsed, projectId);
+    }
+    case "read_file": {
+      const parsed = parseArgs(PathArgs, args);
+      if (typeof parsed === "string") return parsed;
+      return await readFile(parsed.path, projectId);
+    }
+    case "delete_file": {
+      const parsed = parseArgs(PathArgs, args);
+      if (typeof parsed === "string") return parsed;
+      return await deleteFile(parsed.path, projectId);
+    }
+    case "mark_complete": {
+      const parsed = parseArgs(MarkCompleteArgs, args);
+      if (typeof parsed === "string") return parsed;
+      return await markComplete(parsed.summary, projectId, executionId, nodeId);
+    }
+    default:
+      return `Error: Invalid tool name: ${toolName}`;
   }
 }
 
@@ -105,9 +232,15 @@ async function createFile(
   path: string,
   content: string,
   projectId: string,
+  toolCallKey: string,
 ): Promise<string> {
   try {
-    const file = await createProjectFile({ projectId, path, content });
+    const file = await createProjectFile({
+      projectId,
+      path,
+      content,
+      toolCallKey,
+    });
     return `File created successfully with id: ${file.id} and path: ${file.path}`;
   } catch (error) {
     if (error instanceof FileConflictError) {

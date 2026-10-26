@@ -4,9 +4,14 @@ import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
 import {
   BuildStartError,
-  retryBuild,
+  retryOrResumeBuild,
 } from "@/src/temporal/runtime";
-import { BuildNotReadyError } from "@/src/runtime/workflows/hcr/start-hcr-workflow";
+import {
+  BuildNotReadyError,
+} from "@/src/runtime/workflows/hcr/start-hcr-workflow";
+import {
+  ResumeNotAvailableError,
+} from "@/src/runtime/workflows/hcr/resume-hcr-run";
 
 export async function POST(
   _request: Request,
@@ -38,7 +43,10 @@ export async function POST(
   }
 
   try {
-    const run = await retryBuild({
+    // Resumes from the node the previous attempt stopped at, reusing its
+    // artifacts and workspace files. Falls back to a fresh build when there is
+    // no resumable position.
+    const run = await retryOrResumeBuild({
       projectId,
       userId: user.id,
       prompt: lastPrompt.content,
@@ -50,12 +58,17 @@ export async function POST(
         workflowId: run.workflowId,
         executionId: run.executionId,
         temporalWorkflowId: run.temporalWorkflowId,
+        attempt: run.attempt,
+        resumed: run.resumed,
         status: "processing",
       },
       { status: 202 },
     );
   } catch (error) {
-    if (error instanceof BuildNotReadyError) {
+    if (
+      error instanceof BuildNotReadyError ||
+      error instanceof ResumeNotAvailableError
+    ) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     }
     if (error instanceof BuildStartError) {

@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local generated workspaces and runtime data.
+    ".doable/**",
+    "DOABLE_HOME/**",
+    "coverage/**",
   ]),
 ]);
 

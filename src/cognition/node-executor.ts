@@ -1,4 +1,4 @@
-import { ArtifactType, NodeStatus, NodeType } from "@prisma/client";
+import { ArtifactType, NodeStatus, NodeType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { callLLM } from "./llm";
 import * as contextEngine from "@/src/hcr/context-engine/engine";
@@ -16,6 +16,7 @@ import {
   markExecutionRunning,
   markNodeRunning,
 } from "@/src/runtime/state/transitions";
+import { resolveNodeBudget } from "@/src/runtime/budgets";
 import { NodeConfig } from "./types/node-config";
 
 export interface ExecuteNodeInput {
@@ -31,10 +32,17 @@ export interface ExecuteNodeInput {
    * artifacts by policy, so this is not read here.
    */
   inputArtifactId?: string | null;
+  /**
+   * Orchestrator attempt number. Recorded on the node and in the running
+   * event so a retry is visible as a distinct attempt, not a duplicate.
+   */
+  attempt?: number;
 }
 
 export interface ExecuteNodeResult {
   artifactId: string | null;
+  /** True when the node stopped on a budget rather than finishing cleanly. */
+  incomplete: boolean;
   nodeType: NodeType;
   workflowId: string;
   executionId: string;
@@ -169,24 +177,63 @@ async function recordUsage(
   });
 }
 
+async function markNodeIncomplete(
+  executionId: string,
+  nodeId: string,
+  nodeType: NodeType,
+  reason: string,
+  detail: Record<string, unknown>,
+) {
+  const changed = await prisma.node.updateMany({
+    where: { id: nodeId, status: { not: NodeStatus.COMPLETED } },
+    data: {
+      status: NodeStatus.INCOMPLETE,
+      failureReason: reason,
+      finishedAt: new Date(),
+    },
+  });
+
+  if (changed.count > 0) {
+    await prisma.runtimeEvent.create({
+      data: {
+        executionId,
+        nodeId,
+        type: "node.budget_exhausted",
+        payload: { nodeId, type: nodeType, reason, ...detail },
+      },
+    });
+  }
+}
+
 export async function executeNode(
   input: ExecuteNodeInput,
 ): Promise<ExecuteNodeResult> {
   const { projectId, executionId, nodeId, prompt, nodeConfig } = input;
 
-  await markExecutionRunning(executionId);
-  await markNodeRunning(executionId, nodeId);
-  await prisma.runtimeEvent.createMany({
-    data: [
-      { executionId, type: "execution.running", payload: { executionId } },
-      {
-        executionId,
-        nodeId,
-        type: "node.running",
-        payload: { nodeId, type: nodeConfig.nodeType },
-      },
-    ],
+  // `execution.running` is emitted only on the CREATED -> RUNNING
+  // transition, so an activity retry cannot duplicate it.
+  const executionStarted = await markExecutionRunning(executionId);
+  await markNodeRunning(executionId, nodeId, input.attempt);
+
+  const runningEvents: Prisma.RuntimeEventCreateManyInput[] = [];
+  if (executionStarted > 0) {
+    runningEvents.push({
+      executionId,
+      type: "execution.running",
+      payload: { executionId },
+    });
+  }
+  runningEvents.push({
+    executionId,
+    nodeId,
+    type: "node.running",
+    payload: {
+      nodeId,
+      type: nodeConfig.nodeType,
+      attempt: input.attempt ?? 1,
+    },
   });
+  await prisma.runtimeEvent.createMany({ data: runningEvents });
 
   let artifactId: string | null = null;
 
@@ -265,7 +312,9 @@ export async function executeNode(
     await markNodeCompleted(executionId, nodeId, nodeConfig.nodeType, artifactId);
   } else {
     let iterations = 0;
-    const maxIterations = nodeConfig.maxIterations || 20;
+    const budget = resolveNodeBudget(nodeConfig.outputMode);
+    const maxIterations = nodeConfig.maxIterations || budget.maxIterations;
+    const startedAt = Date.now();
     const currentContext = {
       currentTask: prompt,
       iteration: 0,
@@ -287,8 +336,13 @@ export async function executeNode(
     });
 
     let markedComplete = false;
+    let budgetExhausted = false;
 
     while (iterations < maxIterations) {
+      if (Date.now() - startedAt >= budget.wallClockMs) {
+        budgetExhausted = true;
+        break;
+      }
       iterations++;
       const request = await requestNodeContext(
         { projectId, executionId, nodeId },
@@ -346,6 +400,7 @@ export async function executeNode(
             input.userId,
             executionId,
             nodeId,
+            iterations,
           );
           await handleToolCompletion(executionId, nodeId, {
             tool: "mark_complete",
@@ -368,6 +423,7 @@ export async function executeNode(
           input.userId,
           executionId,
           nodeId,
+          iterations,
         );
         toolHistory.push({
           role: "tool",
@@ -392,9 +448,39 @@ export async function executeNode(
       if (markedComplete) break;
     }
 
+    const elapsedMs = Date.now() - startedAt;
+
     if (!markedComplete) {
+      if (budgetExhausted || iterations >= maxIterations) {
+        // Work was produced but the budget bound it. That is neither success
+        // nor failure: report it honestly and keep the work.
+        await markNodeIncomplete(
+          executionId,
+          nodeId,
+          nodeConfig.nodeType,
+          `Stopped on budget after ${iterations} iterations (${Math.round(elapsedMs / 1000)}s) without mark_complete`,
+          {
+            iterations,
+            maxIterations,
+            elapsedMs,
+            wallClockMs: budget.wallClockMs,
+            reason: budgetExhausted ? "wall_clock" : "iterations",
+          },
+        );
+        return {
+          artifactId: null,
+          incomplete: true,
+          nodeType: nodeConfig.nodeType,
+          workflowId: input.workflowId,
+          executionId,
+          projectId,
+          userId: input.userId,
+          prompt,
+        };
+      }
+
       throw new Error(
-        `${nodeConfig.nodeType} exhausted ${maxIterations} iterations without mark_complete`,
+        `${nodeConfig.nodeType} stopped without calling mark_complete`,
       );
     }
 
@@ -403,6 +489,7 @@ export async function executeNode(
 
   return {
     artifactId,
+    incomplete: false,
     nodeType: nodeConfig.nodeType,
     workflowId: input.workflowId,
     executionId,

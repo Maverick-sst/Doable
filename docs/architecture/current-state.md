@@ -110,7 +110,27 @@ Run on the current worktree:
 
 The local containers were stopped after verification; volumes were preserved.
 
+
+## Known open defects (reported by the maintainer, 2026-10-26)
+
+Confirmed at `fa285a2`. Root cause and remedy are specified in
+`docs/plans/NEXT_PHASE_PLAN.md`.
+
+**Status: fixed in D1 (2026-10-26).** Kept here as the record of what was
+wrong; see `docs/plans/NEXT_PHASE_PLAN.md` for the delivery record.
+
+| Symptom | Root cause | Location |
+|---|---|---|
+| Build fails after ~15 minutes | `startToCloseTimeout: "15 minutes"` on tool-node activities; `heartbeatTimeout` only 2 minutes; workflow ceiling 2 hours | `src/temporal/workflows/hcrWorkflow.ts:29-42`, `src/temporal/runtime.ts:58` |
+| Frontend engineer fails after producing 38 files | Tool nodes capped at `maxIterations: 20`; one file per turn needs ~38 turns. Exhaustion throws and marks the node FAILED | `src/cognition/agent-registry.ts:89,105`, `src/cognition/node-executor.ts:268,397` |
+| Retry re-runs the whole graph and re-pays for 6–7 artifacts | A retry always creates a new Workflow + Execution + `Node(ARCHITECT, order 1)`, so there is no resumable position | `src/runtime/workflows/hcr/start-hcr-workflow.ts`, `app/api/projects/[id]/retry/route.ts` |
+
+Measured real-model node durations with `glm-5.3-flash`: ARCHITECT 16s,
+RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
+105s.
+
 ## Not yet verified
+
 
 - Real Ollama/OpenRouter model quality and latency.
 - Browser-level E2E (the API golden path is verified; the UI is built but not

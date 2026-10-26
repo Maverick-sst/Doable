@@ -5,6 +5,14 @@ import { getTemporalClient, getTemporalTaskQueue } from "./client";
 import { hcrWorkflow } from "./workflows/hcrWorkflow";
 import { startHcrRun } from "@/src/runtime/workflows/hcr/start-hcr-workflow";
 import {
+  composeResumePrompt,
+  findResumeTarget,
+  resumeHcrRun,
+  type ResumeTarget,
+} from "@/src/runtime/workflows/hcr/resume-hcr-run";
+import { listWorkspaceFiles } from "@/src/runtime/workspace";
+import { HCR_WORKFLOW_TIMEOUT } from "@/src/runtime/budgets";
+import {
   cancelExecution,
   failExecution,
 } from "@/src/runtime/state/transitions";
@@ -37,15 +45,21 @@ export interface StartBuildResult {
  * The single build-start seam. Routes never create orchestration rows or
  * start Temporal themselves; they call this and map the error.
  */
-export async function startBuild(
-  input: StartBuildInput,
-): Promise<StartBuildResult> {
-  const run = await startHcrRun(input);
+async function startTemporalAttempt(input: {
+  projectId: string;
+  userId: string;
+  workflowId: string;
+  executionId: string;
+  nodeId: string;
+  /** The prompt the node works from. */
+  prompt: string;
+  inputArtifactId: string | null;
+}): Promise<{ temporalWorkflowId: string; temporalRunId: string }> {
   const identity = {
-    projectId: run.projectId,
-    workflowId: run.workflowId,
-    executionId: run.executionId,
-    nodeId: run.nodeId,
+    projectId: input.projectId,
+    workflowId: input.workflowId,
+    executionId: input.executionId,
+    nodeId: input.nodeId,
     userId: input.userId,
   };
   const temporalWorkflowId = buildHcrWorkflowId(identity);
@@ -55,18 +69,18 @@ export async function startBuild(
     const handle = await client.workflow.start(hcrWorkflow, {
       taskQueue: getTemporalTaskQueue(),
       workflowId: temporalWorkflowId,
-      workflowExecutionTimeout: "2 hours",
+      workflowExecutionTimeout: HCR_WORKFLOW_TIMEOUT,
       args: [
         {
           identity,
           prompt: input.prompt,
-          inputArtifactId: input.inputArtifactId ?? null,
+          inputArtifactId: input.inputArtifactId,
         },
       ],
     });
 
     await prisma.execution.update({
-      where: { id: run.executionId },
+      where: { id: input.executionId },
       data: {
         temporalWorkflowId,
         temporalRunId: handle.firstExecutionRunId,
@@ -75,7 +89,6 @@ export async function startBuild(
     });
 
     return {
-      ...run,
       temporalWorkflowId,
       temporalRunId: handle.firstExecutionRunId,
     };
@@ -83,10 +96,10 @@ export async function startBuild(
     const reason =
       error instanceof Error ? error.message : "Temporal start failed";
     await failExecution({
-      projectId: run.projectId,
-      workflowId: run.workflowId,
-      executionId: run.executionId,
-      nodeId: run.nodeId,
+      projectId: input.projectId,
+      workflowId: input.workflowId,
+      executionId: input.executionId,
+      nodeId: input.nodeId,
       reason,
       code: "trigger_error",
     });
@@ -94,6 +107,92 @@ export async function startBuild(
       "The build worker is unavailable. The project is recoverable; retry when Temporal is running.",
     );
   }
+}
+
+export async function startBuild(
+  input: StartBuildInput,
+): Promise<StartBuildResult> {
+  const run = await startHcrRun(input);
+  const started = await startTemporalAttempt({
+    projectId: run.projectId,
+    userId: input.userId,
+    workflowId: run.workflowId,
+    executionId: run.executionId,
+    nodeId: run.nodeId,
+    prompt: input.prompt,
+    inputArtifactId: input.inputArtifactId ?? null,
+  });
+
+  return { ...run, ...started };
+}
+
+export interface ResumeBuildInput {
+  projectId: string;
+  userId: string;
+  /** The original user prompt, kept in the message record. */
+  prompt: string;
+  target: ResumeTarget;
+}
+
+export interface ResumeBuildResult extends StartBuildResult {
+  attempt: number;
+}
+
+/**
+ * Resume a failed or partial attempt from the node it stopped at.
+ *
+ * Artifacts and workspace files from the previous attempt are reused, so the
+ * resumed node continues instead of re-deriving the whole build.
+ */
+export async function resumeBuild(
+  input: ResumeBuildInput,
+): Promise<ResumeBuildResult> {
+  const existingFiles = await listWorkspaceFiles(input.projectId);
+  const resumePrompt = composeResumePrompt({
+    originalPrompt: input.prompt,
+    attempt: input.target.attempt + 1,
+    nodeType: input.target.nodeType,
+    existingFiles,
+  });
+
+  const run = await resumeHcrRun({
+    projectId: input.projectId,
+    userId: input.userId,
+    prompt: input.prompt,
+    resumePrompt,
+    target: input.target,
+  });
+
+  const started = await startTemporalAttempt({
+    projectId: run.projectId,
+    userId: input.userId,
+    workflowId: run.workflowId,
+    executionId: run.executionId,
+    nodeId: run.nodeId,
+    prompt: resumePrompt,
+    inputArtifactId: run.inputArtifactId,
+  });
+
+  return { ...run, ...started };
+}
+
+/**
+ * Choose between resuming and starting fresh.
+ *
+ * A previous attempt that stopped at a node resumes from that node. Anything
+ * else starts a new build.
+ */
+export async function retryOrResumeBuild(
+  input: StartBuildInput,
+): Promise<StartBuildResult & { resumed: boolean; attempt: number }> {
+  const target = await findResumeTarget(input.projectId);
+  if (!target) {
+    const started = await startBuild(input);
+    return { ...started, resumed: false, attempt: 1 };
+  }
+
+  const resumed = await resumeBuild({ ...input, target });
+  return { ...resumed, resumed: true, attempt: resumed.attempt };
 }
 
 export async function cancelBuild(input: {

@@ -5,6 +5,14 @@ import type {
   TemporalHcrResult,
 } from "../contracts/hcr";
 import type { DoableIdentity } from "../contracts/types";
+import {
+  DATABASE_ACTIVITY_TIMEOUT,
+  HEARTBEAT_TIMEOUT,
+  NODE_ACTIVITY_ATTEMPTS,
+  NODE_SCHEDULE_TO_CLOSE_TIMEOUT,
+  STRUCTURED_NODE_ACTIVITY_TIMEOUT,
+  TOOL_NODE_ACTIVITY_TIMEOUT,
+} from "../workflow-timeouts";
 
 // Validation is a short read-only DB check; node execution performs
 // embeddings + LLM attempts + artifact/file writes and needs minutes.
@@ -12,8 +20,8 @@ import type { DoableIdentity } from "../contracts/types";
 const { validateHcrContext } = wf.proxyActivities<
   typeof import("../activities/hcrActivities")
 >({
-  startToCloseTimeout: "30 seconds",
-  retry: { maximumAttempts: 3 },
+  startToCloseTimeout: DATABASE_ACTIVITY_TIMEOUT,
+  retry: { maximumAttempts: NODE_ACTIVITY_ATTEMPTS },
 });
 
 // Structured nodes get room for slow-provider LLM calls (a ~5-minute call
@@ -26,9 +34,10 @@ const { validateHcrContext } = wf.proxyActivities<
 const { runHcrNodeActivity } = wf.proxyActivities<
   typeof import("../activities/hcrActivities")
 >({
-  startToCloseTimeout: "10 minutes",
-  heartbeatTimeout: "2 minutes",
-  retry: { maximumAttempts: 3 },
+  startToCloseTimeout: STRUCTURED_NODE_ACTIVITY_TIMEOUT,
+  scheduleToCloseTimeout: NODE_SCHEDULE_TO_CLOSE_TIMEOUT,
+  heartbeatTimeout: HEARTBEAT_TIMEOUT,
+  retry: { maximumAttempts: NODE_ACTIVITY_ATTEMPTS },
 });
 
 // Tool-call nodes (FRONTEND_ENG / BACKEND_ENG) loop up to 20 agentic
@@ -37,17 +46,18 @@ const { runHcrNodeActivity } = wf.proxyActivities<
 const { runHcrNodeActivity: runHcrToolNode } = wf.proxyActivities<
   typeof import("../activities/hcrActivities")
 >({
-  startToCloseTimeout: "15 minutes",
-  heartbeatTimeout: "2 minutes",
-  retry: { maximumAttempts: 3 },
+  startToCloseTimeout: TOOL_NODE_ACTIVITY_TIMEOUT,
+  scheduleToCloseTimeout: NODE_SCHEDULE_TO_CLOSE_TIMEOUT,
+  heartbeatTimeout: HEARTBEAT_TIMEOUT,
+  retry: { maximumAttempts: NODE_ACTIVITY_ATTEMPTS },
 });
 
 // Coordinator port + finalize port: short DB-only steps.
 const { createNextHcrNodes, finalizeHcrSlice } = wf.proxyActivities<
   typeof import("../activities/hcrActivities")
 >({
-  startToCloseTimeout: "30 seconds",
-  retry: { maximumAttempts: 3 },
+  startToCloseTimeout: DATABASE_ACTIVITY_TIMEOUT,
+  retry: { maximumAttempts: NODE_ACTIVITY_ATTEMPTS },
 });
 
 // Short, non-retried compensation: it only runs after a node activity has
@@ -56,7 +66,7 @@ const { createNextHcrNodes, finalizeHcrSlice } = wf.proxyActivities<
 const { markHcrFailed } = wf.proxyActivities<
   typeof import("../activities/hcrActivities")
 >({
-  startToCloseTimeout: "30 seconds",
+  startToCloseTimeout: DATABASE_ACTIVITY_TIMEOUT,
   retry: { maximumAttempts: 1 },
 });
 
@@ -127,6 +137,7 @@ export async function hcrWorkflow(
   let lastNodeType = validated.nodeType;
   let finalStatus = validated.executionStatus;
   let compensatedNodeFailure = false;
+  let anyIncomplete = false;
 
   try {
     while (pending.length > 0) {
@@ -181,6 +192,7 @@ export async function hcrWorkflow(
 
       for (const result of results) {
         nodesCompleted.push(result.nodeType);
+        if (result.incomplete) anyIncomplete = true;
         artifacts.push({
           nodeType: result.nodeType,
           artifactId: result.artifactId,
@@ -226,8 +238,11 @@ export async function hcrWorkflow(
         pending = nextPending;
       } else {
         if (finalizeRequested) {
-          await finalizeHcrSlice({ identity: baseIdentity });
-          finalStatus = "COMPLETED";
+          await finalizeHcrSlice({
+            identity: baseIdentity,
+            partial: anyIncomplete,
+          });
+          finalStatus = anyIncomplete ? "PARTIAL" : "COMPLETED";
         }
         pending = [];
       }

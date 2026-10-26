@@ -40,6 +40,8 @@ export async function createProjectFile(input: {
   projectId: string;
   path: string;
   content: string;
+  /** Idempotency key of the tool call that produced this file, when known. */
+  toolCallKey?: string;
 }): Promise<ProjectFileRecord> {
   // Retried tool calls and repeated agent steps should not fail when the
   // requested file already exists with identical content.
@@ -67,6 +69,7 @@ export async function createProjectFile(input: {
           content: input.content,
           size: Buffer.byteLength(input.content),
           revision: 1,
+          toolCallKey: input.toolCallKey ?? null,
         },
       });
     } catch (error) {

@@ -6,6 +6,7 @@ import { executeNode } from "@/src/cognition/node-executor";
 import { HCR_TRANSITION_MAP } from "@/src/runtime/workflows/hcr/transition-map";
 import {
   completeExecution,
+  completeExecutionPartially,
   failExecution,
 } from "@/src/runtime/state/transitions";
 import type {
@@ -24,8 +25,9 @@ import type {
   MarkHcrFailedActivityResult,
 } from "../contracts/hcr";
 import { isHcrDomainFailure } from "../contracts/hcr";
+import { HEARTBEAT_INTERVAL_MS as HEARTBEAT_INTERVAL } from "@/src/runtime/budgets";
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = HEARTBEAT_INTERVAL;
 
 /**
  * Heartbeat lease renewal around a long, non-interruptible operation (LLM
@@ -316,6 +318,7 @@ export async function runHcrNodeActivity(
         prompt,
         inputArtifactId: inputArtifactId ?? null,
         nodeConfig,
+        attempt: Context.current().info.attempt,
       }),
     );
   } catch (error) {
@@ -334,6 +337,7 @@ export async function runHcrNodeActivity(
     nodeType: result.nodeType,
     artifactId: result.artifactId,
     artifactType: nodeConfig.outputArtifactType,
+    incomplete: result.incomplete,
     nodeMigrated: true as const,
   };
 }
@@ -448,11 +452,14 @@ export async function finalizeHcrSlice(
   const { identity } = input;
   const { workflowId, executionId, projectId } = identity;
 
-  const result = await completeExecution({
-    projectId,
-    workflowId,
-    executionId,
-  });
+  const result = input.partial
+    ? await completeExecutionPartially({
+        projectId,
+        workflowId,
+        executionId,
+        reason: "One or more nodes stopped on budget",
+      })
+    : await completeExecution({ projectId, workflowId, executionId });
 
   return { doableExecutionId: executionId, finalized: result.transitioned };
 }
