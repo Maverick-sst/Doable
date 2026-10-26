@@ -1,5 +1,6 @@
 import { NodeType, ArtifactType } from "@prisma/client";
 import { NodeConfig } from "./types/node-config";
+import { resolveNodeBudget } from "@/src/runtime/budgets";
 import {
   ARCHITECT_SYSTEM_PROMPT,
   RESEARCHER_SYSTEM_PROMPT,
@@ -22,7 +23,7 @@ export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> = {
       includeMessageHistory: false,
     },
     usesFileTools: false,
-    maxIterations: 1,
+    maxIterations: resolveNodeBudget("structured_json").maxIterations,
     outputMode: "structured_json",
   },
 
@@ -38,7 +39,7 @@ export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> = {
       includeMessageHistory: false,
     },
     usesFileTools: false,
-    maxIterations: 1,
+    maxIterations: resolveNodeBudget("structured_json").maxIterations,
     outputMode: "structured_json",
   },
 
@@ -54,7 +55,7 @@ export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> = {
       includeMessageHistory: false,
     },
     usesFileTools: false,
-    maxIterations: 1,
+    maxIterations: resolveNodeBudget("structured_json").maxIterations,
     outputMode: "structured_json",
   },
 
@@ -70,7 +71,7 @@ export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> = {
       includeMessageHistory: false,
     },
     usesFileTools: false,
-    maxIterations: 1,
+    maxIterations: resolveNodeBudget("structured_json").maxIterations,
     outputMode: "structured_json",
   },
 
@@ -86,7 +87,7 @@ export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> = {
       includeMessageHistory: false,
     },
     usesFileTools: true,
-    maxIterations: 20,
+    maxIterations: resolveNodeBudget("tool_calls").maxIterations,
     outputMode: "tool_calls",
   },
 
@@ -102,7 +103,7 @@ export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> = {
       includeMessageHistory: false,
     },
     usesFileTools: true,
-    maxIterations: 20,
+    maxIterations: resolveNodeBudget("tool_calls").maxIterations,
     outputMode: "tool_calls",
   },
 };

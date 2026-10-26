@@ -6,6 +6,10 @@ import {
 } from "@/src/temporal/contracts/hcr";
 import { AGENT_REGISTRY } from "@/src/cognition/agent-registry";
 import { HCR_TRANSITION_MAP } from "@/src/runtime/workflows/hcr/transition-map";
+import {
+  DEFAULT_TOOL_NODE_ITERATIONS,
+  resolveNodeBudget,
+} from "@/src/runtime/budgets";
 
 // Agent 04 offline equivalence suite: pure contract/cognition checks only.
 // No DB, no Temporal server, no Docker. Runtime scenarios (happy path, retry,
@@ -145,11 +149,17 @@ describe("Full-graph wrap parity (generic activity + coordinator port)", () => {
     expect(
       HCR_TRANSITION_MAP[ArtifactType.EXECUTION_PLAN]?.nextNodes,
     ).toContain(NodeType.FRONTEND_ENG);
-    expect(
-      AGENT_REGISTRY[NodeType.FRONTEND_ENG]?.maxIterations,
-    ).toBe(20);
-    expect(
-      AGENT_REGISTRY[NodeType.BACKEND_ENG]?.maxIterations,
-    ).toBe(20);
+    // The registry follows the budget module rather than pinning a literal,
+    // so the ceiling can change without this parity test going stale.
+    expect(AGENT_REGISTRY[NodeType.FRONTEND_ENG]?.maxIterations).toBe(
+      resolveNodeBudget("tool_calls").maxIterations,
+    );
+    expect(AGENT_REGISTRY[NodeType.BACKEND_ENG]?.maxIterations).toBe(
+      resolveNodeBudget("tool_calls").maxIterations,
+    );
+    // A tool node writes roughly one file per turn, so the default ceiling
+    // must be large enough for a realistic multi-file project.
+    expect(DEFAULT_TOOL_NODE_ITERATIONS).toBeGreaterThanOrEqual(60);
+    expect(resolveNodeBudget("structured_json").maxIterations).toBe(1);
   });
 });

@@ -170,6 +170,70 @@ export async function completeExecution(input: ExecutionIdentity) {
 }
 
 /**
+ * Partial completion: the attempt ran but one or more nodes stopped on a
+ * budget. The work produced is kept and stays inspectable, and the project
+ * is marked INCOMPLETE so the user can resume or iterate. It is never
+ * reported as a finished build.
+ */
+export async function completeExecutionPartially(
+  input: ExecutionIdentity & { reason?: string },
+) {
+  const reason = safeReason(input.reason ?? "Stopped on budget");
+
+  return prisma.$transaction(async (tx) => {
+    const execution = await tx.execution.updateMany({
+      where: {
+        id: input.executionId,
+        status: {
+          notIn: [
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.PARTIAL,
+          ],
+        },
+      },
+      data: {
+        status: ExecutionStatus.PARTIAL,
+        completionStatus: "PARTIAL",
+        finishedAt: new Date(),
+      },
+    });
+
+    if (execution.count === 0) {
+      return { transitioned: false, projectId: input.projectId };
+    }
+
+    await tx.workflow.updateMany({
+      where: { id: input.workflowId, status: { not: WorkflowStatus.COMPLETED } },
+      data: { status: WorkflowStatus.COMPLETED },
+    });
+
+    await tx.project.update({
+      where: { id: input.projectId },
+      data: { status: ProjectStatus.INCOMPLETE, failureReason: reason },
+    });
+
+    await tx.runtimeEvent.createMany({
+      data: [
+        {
+          executionId: input.executionId,
+          type: "execution.incomplete",
+          payload: { executionId: input.executionId, reason },
+        },
+        {
+          executionId: input.executionId,
+          type: "workflow.completed",
+          payload: { workflowId: input.workflowId },
+        },
+      ],
+    });
+
+    return { transitioned: true, projectId: input.projectId };
+  });
+}
+
+/**
  * Cancellation is a product action, not a node failure. The project returns
  * to IDLE so the user can start a new attempt.
  */
@@ -243,20 +307,41 @@ export async function reopenProjectForRetry(projectId: string) {
   });
 }
 
+/**
+ * Transition an execution to RUNNING. Returns the number of rows that
+ * actually changed, so the caller can emit `execution.running` exactly once
+ * and a retry cannot duplicate the event.
+ */
 export async function markExecutionRunning(executionId: string) {
-  return prisma.execution.updateMany({
-    where: { id: executionId, status: { in: [ExecutionStatus.CREATED, ExecutionStatus.RUNNING] } },
+  const result = await prisma.execution.updateMany({
+    where: { id: executionId, status: ExecutionStatus.CREATED },
     data: { status: ExecutionStatus.RUNNING, startedAt: new Date() },
   });
+  return result.count;
 }
 
-export async function markNodeRunning(executionId: string, nodeId: string) {
-  return prisma.node.updateMany({
-    where: { id: nodeId, executionId, status: { in: [NodeStatus.CREATED, NodeStatus.RUNNING] } },
+/**
+ * Transition a node to RUNNING and count its attempt. Returns the number of
+ * rows that changed, so `node.running` is emitted once per attempt.
+ */
+export async function markNodeRunning(
+  executionId: string,
+  nodeId: string,
+  attempt?: number,
+) {
+  const result = await prisma.node.updateMany({
+    where: {
+      id: nodeId,
+      executionId,
+      status: { in: [NodeStatus.CREATED, NodeStatus.RUNNING] },
+    },
     data: {
       status: NodeStatus.RUNNING,
       startedAt: new Date(),
-      attempt: { increment: 1 },
+      ...(attempt === undefined
+        ? { attempt: { increment: 1 } }
+        : { attempt: Math.max(attempt, 1) }),
     },
   });
+  return result.count;
 }

@@ -149,6 +149,11 @@ export interface HcrNodeActivityResult {
   artifactId: string | null;
   /** Null for file-mutation nodes (FRONTEND_ENG / BACKEND_ENG). */
   artifactType: ArtifactType | null;
+  /**
+   * True when the node stopped on a budget rather than finishing. The work
+   * produced so far is kept; the attempt ends PARTIAL, never COMPLETE.
+   */
+  incomplete: boolean;
   nodeMigrated: true;
 }
 
@@ -180,6 +185,11 @@ export interface CreateNextHcrNodesResult {
 /** Input to the finalize-port Activity (mirrors `finalizeWorkflow`). */
 export interface FinalizeHcrSliceInput {
   identity: DoableIdentity;
+  /**
+   * True when one or more nodes stopped on a budget. The attempt ends
+   * PARTIAL and the project ends INCOMPLETE, never IDLE.
+   */
+  partial?: boolean;
 }
 
 /** Result of the finalize-port Activity. */

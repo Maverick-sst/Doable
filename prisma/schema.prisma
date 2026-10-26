@@ -16,6 +16,7 @@ enum ProjectStatus {
   PENDING
   IN_PROGRESS
   IDLE
+  INCOMPLETE
   FAILED
 }
 
@@ -58,6 +59,7 @@ enum ExecutionStatus {
   CREATED
   RUNNING
   COMPLETED
+  PARTIAL
   FAILED
   CANCELLED
 }
@@ -85,6 +87,13 @@ enum ArtifactType {
   VERIFICATION_REPORT
 }
 
+enum ToolCallStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
 enum VerificationStatus {
   NOT_RUN
   RUNNING
@@ -98,6 +107,7 @@ enum NodeStatus {
   CREATED
   RUNNING
   COMPLETED
+  INCOMPLETE
   FAILED
   SKIPPED
 }
@@ -159,6 +169,8 @@ model File {
   revision        Int             @default(1)
   size            Int?
   mimeType        String?
+  /// Idempotency key of the tool call that produced this file.
+  toolCallKey     String?         @unique
   embedding       Unsupported("vector(768)")?
   embeddingStatus EmbeddingStatus @default(EMBEDDING_PENDING)
   createdAt       DateTime        @default(now())
@@ -188,6 +200,16 @@ model Execution {
   workflow           Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   status             ExecutionStatus @default(CREATED)
   retryCount         Int             @default(0)
+  /// Attempt number within one build. Attempt 1 is the original run.
+  attempt            Int             @default(1)
+  /// The attempt this one resumes from, when it is a resume.
+  parentExecutionId  String?
+  parentExecution    Execution?      @relation("ExecutionAttempts", fields: [parentExecutionId], references: [id], onDelete: SetNull)
+  childExecutions    Execution[]     @relation("ExecutionAttempts")
+  /// Node type this attempt resumed at, for audit.
+  resumedFromNodeType NodeType?
+  /// COMPLETE, PARTIAL, or FAILED — distinct from the transport status.
+  completionStatus   String          @default("COMPLETE")
   temporalWorkflowId String?
   temporalRunId      String?
   startedAt          DateTime?
@@ -196,11 +218,13 @@ model Execution {
   nodes              Node[]
   events             RuntimeEvent[]
   artifacts          Artifact[]
+  toolCalls          ToolCall[]
   verifications      VerificationReport[]
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 
   @@index([status, updatedAt])
+  @@index([parentExecutionId])
 }
 
 model Node {
@@ -214,11 +238,16 @@ model Node {
   status        NodeStatus     @default(CREATED)
   order         Int
   attempt       Int            @default(0)
+  /// Version of the agent configuration used for this node.
+  agentConfigVersion String?
+  /// Hash of the agent configuration, for exact reproduction.
+  agentConfigHash String?
   startedAt     DateTime?
   finishedAt    DateTime?
   failureReason String?        @db.Text
   events        RuntimeEvent[]
   artifacts     Artifact[]
+  toolCalls     ToolCall[]
   verifications VerificationReport[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -275,6 +304,27 @@ model ProjectMemory {
   summary      String
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+}
+
+model ToolCall {
+  id              String          @id @default(cuid())
+  executionId     String
+  execution       Execution       @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  nodeId          String?
+  node            Node?           @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  /// Stable key derived from execution, node, turn, tool and argument hash.
+  idempotencyKey  String          @unique
+  tool            String
+  toolVersion     String?
+  argumentsHash   String
+  status          ToolCallStatus  @default(STARTED)
+  result          String?         @db.Text
+  errorCode       String?
+  startedAt       DateTime        @default(now())
+  finishedAt      DateTime?
+  createdAt       DateTime        @default(now())
+
+  @@index([executionId, nodeId])
 }
 
 model VerificationReport {

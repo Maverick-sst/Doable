@@ -146,12 +146,55 @@ function nodeKind(messages: Message[]): string {
   return "UNKNOWN";
 }
 
+/**
+ * Per-node failure counter for the resume drill.
+ *
+ * The structured executor retries a bad JSON response three times inside one
+ * activity attempt before failing non-retryably, so a drill must fail at
+ * least that many calls to make the first attempt actually fail.
+ */
+const failureCounts = new Map<string, number>();
+
+function failureLimit(): number {
+  const explicit = Number(process.env.MOCK_FAIL_TIMES);
+  if (Number.isFinite(explicit) && explicit >= 0) return explicit;
+  if (process.env.MOCK_FAIL_ONCE === "1") return 1;
+  return Number.POSITIVE_INFINITY;
+}
+
 function chatResponse(messages: Message[]) {
   const kind = nodeKind(messages);
   const hasToolResult = messages.some((message) => message.role === "tool");
 
-  if (process.env.MOCK_FAIL_NODE && process.env.MOCK_FAIL_NODE === kind) {
+  const count = failureCounts.get(kind) ?? 0;
+  const shouldFail =
+    process.env.MOCK_FAIL_NODE === kind && count < failureLimit();
+
+  if (shouldFail) {
+    failureCounts.set(kind, count + 1);
     return { message: { content: "this is not valid json" } };
+  }
+
+  // Never finish: keeps producing files until the node budget is exhausted.
+  // Only tool nodes make sense here; structured nodes must return JSON.
+  if (
+    process.env.MOCK_NEVER_COMPLETE === "1" &&
+    (kind === "FRONTEND" || kind === "BACKEND")
+  ) {
+    const path = `src/generated-${Date.now()}.txt`;
+    return {
+      message: {
+        content: "",
+        tool_calls: [
+          {
+            function: {
+              name: "create_file",
+              arguments: JSON.stringify({ path, content: "generated\n" }),
+            },
+          },
+        ],
+      },
+    };
   }
 
   if (kind === "DISCOVERY") {
