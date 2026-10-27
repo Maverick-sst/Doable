@@ -563,87 +563,101 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
   return (
     <AppShell>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
-            >
-              Projects
-            </Link>
-            <span className="text-xs text-zinc-300 dark:text-zinc-600">/</span>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {project.name}
-            </h1>
-            <Badge tone={statusTone(activeStatus)}>{activeStatus}</Badge>
+      <div className="mb-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-[10.5px]">
+              <Link
+                href="/dashboard"
+                className="text-faint transition-colors hover:text-ink"
+              >
+                Projects
+              </Link>
+              <span className="text-line-strong">/</span>
+              <span className="text-muted">Workspace</span>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2.5">
+              <h1 className="truncate text-[24px] font-semibold tracking-[-0.035em] text-ink">
+                {project.name}
+              </h1>
+              <Badge tone={statusTone(activeStatus)}>{activeStatus}</Badge>
+            </div>
+            <p className="mt-1.5 max-w-2xl text-[12px] leading-5 text-muted">
+              {project.description || "No description yet."}
+            </p>
           </div>
-          <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
-            {project.description || "No description yet."}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <a href={`/api/projects/${projectId}/export`}>
-            <Button variant="secondary">Export ZIP</Button>
-          </a>
-          {isRunning ? (
-            <Button variant="danger" onClick={() => void cancelBuild()} disabled={busy}>
-              Cancel build
-            </Button>
-          ) : null}
-          {activeStatus === "FAILED" ? (
-            <Button onClick={() => void retryBuild()} disabled={busy}>
-              Retry
-            </Button>
-          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <a href={`/api/projects/${projectId}/export`}>
+              <Button variant="secondary">Export ZIP</Button>
+            </a>
+            {isRunning ? (
+              <Button
+                variant="danger"
+                onClick={() => void cancelBuild()}
+                disabled={busy}
+              >
+                Cancel build
+              </Button>
+            ) : null}
+            {activeStatus === "FAILED" ? (
+              <Button onClick={() => void retryBuild()} disabled={busy}>
+                Retry
+              </Button>
+            ) : null}
+          </div>
         </div>
       </div>
 
       {error ? (
-        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+        <div className="mb-4 rounded-lg border border-danger-line bg-danger-soft px-3.5 py-2.5 text-[12px] text-danger">
           {error}
         </div>
       ) : null}
 
       {status?.failureReason || buildExecution?.failureReason ? (
-        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+        <div className="mb-4 rounded-lg border border-warning-line bg-warning-soft px-3.5 py-2.5 text-[12px] text-warning">
           <strong className="font-semibold">Build stopped: </strong>
           {buildExecution?.failureReason ?? status?.failureReason}
         </div>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap gap-1 rounded-lg border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="mb-5 flex items-center gap-1 overflow-x-auto border-b border-line">
         {tabs.map((item) => (
           <button
             key={item.id}
             onClick={() => setTab(item.id)}
+            aria-current={tab === item.id ? "page" : undefined}
             className={cn(
-              "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              "-mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[12px] font-medium transition-colors",
               tab === item.id
-                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white",
+                ? "border-ink text-ink"
+                : "border-transparent text-muted hover:text-ink",
             )}
           >
             {item.label}
             {item.id === "artifacts" ? (
-              <span className="ml-1 text-[10px] opacity-70">{artifacts.length}</span>
+              <span className="rounded bg-hover px-1 py-0.5 text-[9px] tabular-nums text-faint">
+                {artifacts.length}
+              </span>
             ) : null}
             {item.id === "files" ? (
-              <span className="ml-1 text-[10px] opacity-70">{files.length}</span>
+              <span className="rounded bg-hover px-1 py-0.5 text-[9px] tabular-nums text-faint">
+                {files.length}
+              </span>
             ) : null}
           </button>
         ))}
       </div>
 
       {tab === "discovery" ? (
-        <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
-          <Card>
+        <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <Card className="min-w-0">
             <CardHeader
               title="Discovery"
               description="The agent asks one focused question at a time. Nothing is built until you approve."
             />
             <CardBody className="space-y-4">
-              <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+              <div className="max-h-[440px] space-y-3 overflow-y-auto rounded-lg border border-line bg-rail/50 p-3">
                 {discoveryMessages.length === 0 ? (
                   <EmptyState
                     title="Describe the idea"
@@ -654,10 +668,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                     <div
                       key={message.id}
                       className={cn(
-                        "max-w-[85%] rounded-xl px-3 py-2 text-sm leading-6",
+                        "max-w-[82%] rounded-xl px-3.5 py-2.5 text-[12.5px] leading-6",
                         message.role === "USER"
-                          ? "ml-auto bg-indigo-600 text-white"
-                          : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100",
+                          ? "ml-auto rounded-br-md bg-accent text-accent-foreground"
+                          : "rounded-bl-md border border-line bg-canvas text-ink shadow-sm",
                       )}
                     >
                       {message.content}
@@ -678,7 +692,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   disabled={activeStatus !== "DISCOVERY" || busy}
                 />
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-zinc-400">
+                  <span className="text-[10.5px] text-faint">
                     {activeStatus === "DISCOVERY"
                       ? "Discovery writes a versioned requirements artifact."
                       : "Requirements are approved; open the Build tab."}
@@ -694,18 +708,18 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             </CardBody>
           </Card>
 
-          <Card className="h-fit">
+          <Card className="h-fit min-w-0">
             <CardHeader title="Requirements" description="Latest approved artifact." />
             <CardBody className="space-y-3">
               {discoveryArtifact ? (
                 <>
                   <div className="flex items-center justify-between">
                     <Badge tone="success">v{discoveryArtifact.version}</Badge>
-                    <span className="text-[11px] text-zinc-400">
+                    <span className="text-[11px] text-faint">
                       {new Date(discoveryArtifact.createdAt).toLocaleString()}
                     </span>
                   </div>
-                  <pre className="max-h-[360px] overflow-auto rounded-lg bg-zinc-950 p-3 text-[11px] leading-5 text-zinc-100">
+                  <pre className="max-h-[360px] overflow-auto rounded-lg border border-line bg-code p-3 text-[10.5px] leading-5 text-code-foreground">
                     {pretty(discoveryArtifact.content)}
                   </pre>
                   {activeStatus === "PENDING" ? (
@@ -715,7 +729,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   ) : null}
                 </>
               ) : (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="text-[11.5px] leading-5 text-muted">
                   No requirements artifact yet. Finish discovery first.
                 </p>
               )}
@@ -725,8 +739,8 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       ) : null}
 
       {tab === "build" ? (
-        <div className="grid gap-5 lg:grid-cols-[1fr_380px]">
-          <div className="space-y-5">
+        <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="min-w-0 space-y-5">
             <Card>
               <CardHeader
                 title="Build"
@@ -747,12 +761,12 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                     </div>
                   </form>
                 ) : activeStatus === "DISCOVERY" ? (
-                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  <p className="text-sm text-muted">
                     Finish discovery and approve the requirements first.
                   </p>
                 ) : activeStatus === "FAILED" ? (
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    <p className="text-sm text-muted">
                       This run failed. Retry starts a new attempt from the same approved requirements.
                     </p>
                     <Button onClick={() => void retryBuild()} disabled={busy}>
@@ -762,7 +776,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 ) : (
                   <div className="flex items-center gap-2">
                     <Spinner label="Build is running" />
-                    <span className="text-xs text-zinc-400">
+                    <span className="text-xs text-faint">
                       Polling every 2 seconds.
                     </span>
                   </div>
@@ -777,7 +791,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               />
               <CardBody>
                 {nodes.length === 0 ? (
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  <p className="text-xs text-muted">
                     No build nodes yet.
                   </p>
                 ) : (
@@ -788,25 +802,25 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                           className={cn(
                             "mt-1 h-2.5 w-2.5 shrink-0 rounded-full",
                             node.status === "COMPLETED"
-                              ? "bg-emerald-500"
+                              ? "bg-success"
                               : node.status === "RUNNING"
-                                ? "animate-pulse bg-sky-500"
+                                ? "animate-pulse bg-brand"
                                 : node.status === "FAILED"
-                                  ? "bg-rose-500"
-                                  : "bg-zinc-300 dark:bg-zinc-700",
+                                  ? "bg-danger"
+                                  : "bg-line-strong ",
                           )}
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-medium">{node.type}</span>
                             <Badge tone={statusTone(node.status)}>{node.status}</Badge>
-                            <span className="text-[11px] text-zinc-400">
+                            <span className="text-[11px] text-faint">
                               order {node.order}
                               {node.attempt > 0 ? ` · attempt ${node.attempt}` : ""}
                             </span>
                           </div>
                           {node.failureReason ? (
-                            <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                            <p className="mt-1 text-[11px] text-danger">
                               {node.failureReason}
                             </p>
                           ) : null}
@@ -819,7 +833,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             </Card>
           </div>
 
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
             <Card>
               <CardHeader title="Run details" />
               <CardBody className="space-y-2 text-xs">
@@ -851,7 +865,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 {verification ? (
                   <>
                     <div className="flex items-center justify-between">
-                      <span className="text-zinc-500 dark:text-zinc-400">Status</span>
+                      <span className="text-muted">Status</span>
                       <Badge tone={statusTone(verification.status)}>
                         {verification.status}
                       </Badge>
@@ -889,11 +903,11 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                             key={`${verification.id}-${step.name}`}
                             className="flex items-center justify-between gap-2"
                           >
-                            <span className="text-zinc-500 dark:text-zinc-400">
+                            <span className="text-muted">
                               {step.name}
                             </span>
                             <span className="flex items-center gap-2">
-                              <span className="text-zinc-400">
+                              <span className="text-faint">
                                 {step.durationMs} ms
                               </span>
                               <Badge tone={statusTone(step.status.toUpperCase())}>
@@ -904,17 +918,17 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                         ))}
                       </div>
                     ) : null}
-                    <pre className="max-h-40 overflow-auto rounded bg-zinc-950 p-2 text-[10px] text-zinc-100">
+                    <pre className="max-h-40 overflow-auto rounded bg-code p-2 text-[10px] text-code-foreground">
                       {verification.output}
                     </pre>
                     {verification.parentReportId ? (
-                      <p className="text-[10px] text-zinc-500">
+                      <p className="text-[10px] text-muted">
                         Re-verification after a repair attempt.
                       </p>
                     ) : null}
                   </>
                 ) : (
-                  <p className="text-zinc-500 dark:text-zinc-400">
+                  <p className="text-muted">
                     No workspace check yet.
                   </p>
                 )}
@@ -932,7 +946,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                         href={verification.previewUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+                        className="text-[11px] font-medium text-brand hover:underline"
                       >
                         Open
                       </a>
@@ -945,7 +959,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                       src={verification.previewUrl}
                       title="Sandbox preview"
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                      className="h-80 w-full rounded border border-zinc-200 bg-white dark:border-zinc-800"
+                      className="h-80 w-full rounded border border-line bg-white "
                     />
                   ) : null}
                   {screenshotUrl ? (
@@ -955,16 +969,16 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                       width={1280}
                       height={800}
                       unoptimized
-                      className="w-full rounded border border-zinc-200 dark:border-zinc-800"
+                      className="w-full rounded border border-line"
                     />
                   ) : null}
                   {typeof browserEvidence.reason === "string" ? (
-                    <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                    <p className="text-[10px] text-warning">
                       Visual evidence unavailable: {browserEvidence.reason}
                     </p>
                   ) : null}
                   {repairEvidence.changed === true ? (
-                    <p className="text-[10px] text-zinc-500">
+                    <p className="text-[10px] text-muted">
                       Repair changed{" "}
                       {Array.isArray(repairEvidence.filesChanged)
                         ? repairEvidence.filesChanged.length
@@ -980,17 +994,17 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               <CardHeader title="Recent events" />
               <CardBody>
                 {(!hcr?.events || hcr.events.length === 0) ? (
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  <p className="text-xs text-muted">
                     No events yet.
                   </p>
                 ) : (
                   <ul className="space-y-2">
                     {hcr.events.slice(-12).reverse().map((event) => (
                       <li key={event.id} className="text-[11px]">
-                        <span className="font-mono text-zinc-500">
+                        <span className="font-mono text-muted">
                           {new Date(event.createdAt).toLocaleTimeString()}
                         </span>{" "}
-                        <span className="text-zinc-800 dark:text-zinc-200">
+                        <span className="text-ink">
                           {event.type}
                         </span>
                       </li>
@@ -1004,12 +1018,12 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       ) : null}
 
       {tab === "artifacts" ? (
-        <div className="grid gap-5 lg:grid-cols-[340px_1fr]">
-          <Card className="h-fit">
+        <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
+          <Card className="h-fit min-w-0">
             <CardHeader title="Artifacts" description="Immutable, versioned outputs." />
             <CardBody className="space-y-2">
               {artifacts.length === 0 ? (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="text-xs text-muted">
                   No artifacts yet.
                 </p>
               ) : (
@@ -1020,8 +1034,8 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                     className={cn(
                       "w-full rounded-lg border px-3 py-2 text-left text-xs transition",
                       selectedArtifact?.id === artifact.id
-                        ? "border-indigo-300 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40"
-                        : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700",
+                        ? "border-brand bg-accent-soft"
+                        : "border-line hover:border-line-strong",
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
@@ -1030,7 +1044,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                         v{artifact.version}
                       </Badge>
                     </span>
-                    <span className="mt-1 block text-[11px] text-zinc-400">
+                    <span className="mt-1 block text-[11px] text-faint">
                       {artifact.producedBy} · {new Date(artifact.createdAt).toLocaleString()}
                     </span>
                   </button>
@@ -1039,7 +1053,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             </CardBody>
           </Card>
 
-          <Card>
+          <Card className="min-w-0">
             <CardHeader
               title={selectedArtifact?.type ?? "Select an artifact"}
               description={
@@ -1050,11 +1064,11 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             />
             <CardBody>
               {selectedArtifact ? (
-                <pre className="max-h-[620px] overflow-auto rounded-lg bg-zinc-950 p-4 text-[11px] leading-5 text-zinc-100">
+                <pre className="max-h-[620px] overflow-auto rounded-lg bg-code p-4 text-[11px] leading-5 text-code-foreground">
                   {pretty(selectedArtifact.content)}
                 </pre>
               ) : (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="text-xs text-muted">
                   Artifacts are the contract between cognitive stages.
                 </p>
               )}
@@ -1068,44 +1082,46 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       ) : null}
 
       {tab === "files" ? (
-        <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
-          <Card className="h-fit">
+        <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <Card className="h-fit min-w-0">
             <CardHeader
               title="Workspace files"
               description="Filesystem-canonical, mirrored in Postgres."
             />
             <CardBody className="space-y-2">
               {files.length === 0 ? (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="text-xs text-muted">
                   No files yet. The build will create them.
                 </p>
               ) : (
-                files.map((file) => (
-                  <div key={file.id} className="flex items-center gap-1">
-                    <button
-                      onClick={() => void openFile(file)}
-                      className={cn(
-                        "min-w-0 flex-1 truncate rounded-md px-2 py-1.5 text-left text-xs",
-                        selectedFile?.id === file.id
-                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                          : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800",
-                      )}
-                      title={file.path}
-                    >
-                      {file.path}
-                    </button>
-                    <button
-                      onClick={() => void deleteFile(file)}
-                      className="rounded px-1.5 py-1 text-[10px] text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                      title="Delete file"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))
+                <div className="max-h-[420px] space-y-0.5 overflow-y-auto pr-1">
+                  {files.map((file) => (
+                    <div key={file.id} className="flex items-center gap-1">
+                      <button
+                        onClick={() => void openFile(file)}
+                        className={cn(
+                          "min-w-0 flex-1 truncate rounded-md px-2 py-1.5 text-left text-xs",
+                          selectedFile?.id === file.id
+                            ? "bg-accent text-accent-foreground"
+                            : "text-muted hover:bg-rail",
+                        )}
+                        title={file.path}
+                      >
+                        {file.path}
+                      </button>
+                      <button
+                        onClick={() => void deleteFile(file)}
+                        className="rounded px-1.5 py-1 text-[10px] text-danger hover:bg-danger-soft"
+                        title="Delete file"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
 
-              <form className="space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-800" onSubmit={createFile}>
+              <form className="space-y-2 border-t border-line pt-3" onSubmit={createFile}>
                 <Input
                   value={newPath}
                   onChange={(event) => setNewPath(event.target.value)}
@@ -1124,7 +1140,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             </CardBody>
           </Card>
 
-          <Card>
+          <Card className="min-w-0">
             <CardHeader
               title={selectedFile?.path ?? "Select a file"}
               description={
@@ -1149,7 +1165,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   spellCheck={false}
                 />
               ) : (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="text-xs text-muted">
                   The workspace is the source of truth for generated code.
                 </p>
               )}
@@ -1169,10 +1185,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   setSelectedArtifact(artifact);
                   setTab("artifacts");
                 }}
-                className="rounded-lg border border-zinc-200 px-3 py-2 text-left text-xs hover:border-indigo-300 dark:border-zinc-800 dark:hover:border-indigo-800"
+                className="rounded-lg border border-line px-3 py-2 text-left text-xs hover:border-brand"
               >
                 <span className="block font-medium">{artifact.type}</span>
-                <span className="text-[11px] text-zinc-400">v{artifact.version}</span>
+                <span className="text-[11px] text-faint">v{artifact.version}</span>
               </button>
             ))}
           </CardBody>
@@ -1185,8 +1201,8 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="text-zinc-500 dark:text-zinc-400">{label}</span>
-      <span className="max-w-[220px] break-all text-right font-mono text-[11px] text-zinc-800 dark:text-zinc-200">
+      <span className="text-muted">{label}</span>
+      <span className="max-w-[220px] break-all text-right font-mono text-[11px] text-ink">
         {value}
       </span>
     </div>

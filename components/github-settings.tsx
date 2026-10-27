@@ -108,12 +108,12 @@ export function GitHubSettings() {
         ) : (
           <>
             {state.connection ? (
-              <div className="rounded-lg border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+              <div className="rounded-lg border border-line p-3 text-xs ">
                 <div className="flex items-center justify-between gap-3">
                   <span className="font-medium">{state.connection.login}</span>
                   <code>••••{state.connection.tokenLast4}</code>
                 </div>
-                <p className="mt-1 text-zinc-500 dark:text-zinc-400">
+                <p className="mt-1 text-muted">
                   Stored encrypted. Scopes:{" "}
                   {state.connection.scopes ?? "not reported"}
                 </p>
@@ -121,7 +121,7 @@ export function GitHubSettings() {
             ) : null}
 
             {!state.encryptionConfigured ? (
-              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <p className="rounded-lg border border-warning-line bg-warning-soft px-3 py-2 text-[11px] leading-5 text-warning">
                 Set <code>APP_ENCRYPTION_KEY</code> to store a token in the
                 database. A server-side <code>GITHUB_TOKEN</code> still works.
               </p>
@@ -160,18 +160,18 @@ export function GitHubSettings() {
             )}
 
             {state.envTokenConfigured ? (
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-xs text-muted">
                 A server-side <code>GITHUB_TOKEN</code> is also configured and
                 is used when no stored connection exists.
               </p>
             ) : null}
             {notice ? (
-              <p className="text-xs text-emerald-600 dark:text-emerald-400">
+              <p className="text-xs text-success">
                 {notice}
               </p>
             ) : null}
             {error ? (
-              <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>
+              <p className="text-xs text-danger">{error}</p>
             ) : null}
           </>
         )}

@@ -220,7 +220,7 @@ export function GitHubPanel({ projectId }: { projectId: string }) {
           />
           <CardBody className="space-y-3 text-sm">
             {!state.configured ? (
-              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <p className="rounded-lg border border-warning-line bg-warning-soft px-3 py-2 text-[11px] leading-5 text-warning">
                 Add a GitHub token in Settings before linking a repository.
               </p>
             ) : null}
@@ -273,7 +273,7 @@ export function GitHubPanel({ projectId }: { projectId: string }) {
                   href={state.link.htmlUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex h-9 items-center text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                  className="inline-flex h-9 items-center text-xs text-brand hover:underline"
                 >
                   Open {state.link.owner}/{state.link.repo}
                 </a>
@@ -301,13 +301,13 @@ export function GitHubPanel({ projectId }: { projectId: string }) {
                     <Stat label="Updated" value={preview.stats.updates} />
                     <Stat label="Deleted" value={preview.stats.deletions} />
                   </div>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  <p className="text-xs text-muted">
                     Push to <code>{preview.branch}</code> from{" "}
                     <code>{preview.baseBranch}</code>. A new branch is created
                     on confirm.
                   </p>
-                  <details className="rounded border border-zinc-200 p-3 text-xs dark:border-zinc-800">
-                    <summary className="cursor-pointer text-zinc-600 dark:text-zinc-300">
+                  <details className="rounded border border-line p-3 text-xs ">
+                    <summary className="cursor-pointer text-muted">
                       Changed paths
                     </summary>
                     <PathList title="Added" paths={preview.plan.additions} />
@@ -351,7 +351,7 @@ export function GitHubPanel({ projectId }: { projectId: string }) {
                   </div>
                 </>
               )}
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-xs text-muted">
                 The workspace is snapshotted again on confirm. If any file
                 changed after preview, the push is refused and you must preview
                 again.
@@ -365,34 +365,34 @@ export function GitHubPanel({ projectId }: { projectId: string }) {
         <CardHeader title="Recent pushes" description="Latest 10 attempts." />
         <CardBody className="space-y-3 text-xs">
           {error ? (
-            <p className="text-rose-600 dark:text-rose-400">{error}</p>
+            <p className="text-danger">{error}</p>
           ) : null}
           {notice ? (
-            <p className="text-emerald-600 dark:text-emerald-400">{notice}</p>
+            <p className="text-success">{notice}</p>
           ) : null}
           {state.pushes.length === 0 ? (
-            <p className="text-zinc-500 dark:text-zinc-400">No pushes yet.</p>
+            <p className="text-muted">No pushes yet.</p>
           ) : (
             state.pushes.map((push) => (
               <div
                 key={push.id}
-                className="space-y-1 border-t border-zinc-200 pt-2 first:border-0 first:pt-0 dark:border-zinc-800"
+                className="space-y-1 border-t border-line pt-2 first:border-0 first:pt-0 "
               >
                 <div className="flex items-center justify-between gap-2">
                   <Badge tone={statusTone(push.status)}>{push.status}</Badge>
-                  <span className="text-zinc-500 dark:text-zinc-400">
+                  <span className="text-muted">
                     {new Date(push.createdAt).toLocaleString()}
                   </span>
                 </div>
                 <code className="block truncate text-[11px]">{push.branch}</code>
                 {push.stats ? (
-                  <p className="text-zinc-500 dark:text-zinc-400">
+                  <p className="text-muted">
                     +{push.stats.additions ?? 0} · ~{push.stats.updates ?? 0} · −
                     {push.stats.deletions ?? 0}
                   </p>
                 ) : null}
                 {push.errorCode ? (
-                  <p className="text-rose-600 dark:text-rose-400">
+                  <p className="text-danger">
                     {push.errorCode}
                   </p>
                 ) : null}
@@ -401,7 +401,7 @@ export function GitHubPanel({ projectId }: { projectId: string }) {
                     href={push.pullRequestUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="block text-indigo-600 hover:underline dark:text-indigo-400"
+                    className="block text-brand hover:underline"
                   >
                     Pull request
                   </a>
@@ -417,9 +417,9 @@ export function GitHubPanel({ projectId }: { projectId: string }) {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
+    <div className="rounded-lg border border-line p-2 ">
       <div className="text-lg font-semibold">{value}</div>
-      <div className="text-zinc-500 dark:text-zinc-400">{label}</div>
+      <div className="text-muted">{label}</div>
     </div>
   );
 }
