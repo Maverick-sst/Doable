@@ -97,14 +97,16 @@ Run on the current worktree:
 | Command / drill | Result |
 |---|---|
 | `bunx tsc --noEmit --incremental false` | Pass |
-| `bun test` | 47 pass, 0 fail (pure suites) |
+| `bun test` | 75 pass, 0 fail |
 | `bun run lint` (scoped TS/TSX) | Pass |
 | `bun run build` | Pass |
 | `bunx prisma validate` | Pass |
-| `prisma migrate deploy` on disposable local Postgres | 14 migrations applied |
+| `prisma migrate status` on local Postgres | 15 migrations, schema up to date |
 | `scripts/verify-local.ts` | Pass: artifact revisions, one-active-build lock, failure, cancel, late-completion guard, workspace, ZIP |
 | `bun run temporal:hello` | Pass: `Hello, World from Temporal!` |
-| `scripts/verify-temporal.ts` with mock provider | Pass: 6 nodes, 4 build artifacts, 2 files, 40 events, project IDLE |
+| `scripts/verify-temporal.ts` with mock provider | Pass: 6 nodes, 4 build artifacts, 2 files, 43 events, project IDLE; every node records `agentConfigVersion` + `agentConfigHash` |
+| `scripts/verify-budget.ts` with `NODE_MAX_ITERATIONS=3` | Pass: project INCOMPLETE, execution PARTIAL, 2 budget events, 6 files preserved |
+| `scripts/verify-resume.ts` with `MOCK_FAIL_NODE=PLANNER` | Pass: attempt 1 FAILED, attempt 2 resumed at PLANNER, upstream artifacts stayed v1 |
 | `scripts/verify-failure.ts` with `MOCK_FAIL_NODE=PLANNER` | Pass: PLANNER FAILED, ARCHITECT COMPLETED, exactly one `node.failed` |
 | API golden path (Next dev + worker + mock provider) | Pass: create → discovery → approve → Temporal build → artifacts/files → ZIP → delete |
 
@@ -129,6 +131,26 @@ Measured real-model node durations with `glm-5.3-flash`: ARCHITECT 16s,
 RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
 105s.
 
+## Agent configuration and the shared agent turn (D2, 2026-10-27)
+
+- `src/hcr/agent-config` is the single source of truth for the six agents.
+  Prompts are versioned (`AGENT_PROMPTS` with id/version/hash), the config
+  contract carries `prompt`, `outputContract`, and a required `version`, and
+  every configuration is validated with Zod at catalog build and on each
+  provider resolution.
+- `AGENT_REGISTRY` is now a derived workflow view: instructions, limits, and
+  output contracts come from `AGENT_DEFINITIONS`; only node-level context
+  policy is declared there.
+- `src/hcr/agent-turn` is the reusable loop (structured output and tool
+  turns) with model, tool-runner, and event adapters. It owns output
+  validation/retry, tool allow-listing, iteration and wall-clock bounds, and
+  the continue/finish decision. Fake adapters cover it in unit tests.
+- `executeNode` resolves and validates the config before any model call,
+  records `Node.agentConfigVersion` + `Node.agentConfigHash`, and emits both
+  in `node.running`.
+- Context policy still belongs to the Context Engine (D3); agent configuration
+  declares the output contract, not retrieval rules.
+
 ## Not yet verified
 
 
@@ -147,8 +169,8 @@ These are the next verification gates; do not claim them until they run.
 - Verification workflow/sandbox (the `VerificationReport` model exists; the
   runner does not).
 - Bounded repair workflow.
-- Agent-config/context-engine V2 integration (boundaries exist; node executor
-  still consumes the registry directly).
+- Context Engine V2 (typed sources, ranking, budgets, compaction). Agent
+  configuration V2 and the shared agent turn landed in D2.
 - Model routing by role and cost accounting.
 - Desktop shell packaging.
 - REA/Alan feature-gap matrix (evidence not collected yet).

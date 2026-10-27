@@ -3,6 +3,7 @@ import type {
   AgentConfig,
   ResolveAgentConfigInput,
 } from "./types";
+import { validateAgentConfig } from "./validation";
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -35,6 +36,9 @@ export const agentConfigProvider = {
     if (input.experimentVariant) {
       copy.experiment = { variant: input.experimentVariant };
     }
+    // Validate the effective configuration, including any experiment marker,
+    // so a caller cannot bypass catalog-time checks by adding a variant.
+    validateAgentConfig(copy, `resolve:${input.agentType}`);
     return deepFreeze(copy);
   },
 };

@@ -497,3 +497,114 @@ merged. D2 will retire the duplicate `AGENT_REGISTRY` surface in favour of
 `agentConfigProvider`, add prompt versioning, populate
 `agentConfigVersion`/`agentConfigHash`, and make the agent turn testable with
 fake model and tool adapters.
+
+## D2 — Agent configuration and the reusable agent turn — COMPLETE (2026-10-27)
+
+### Scope delivered
+
+- **One catalog.** `src/hcr/agent-config` owns the six agents. `AGENT_REGISTRY`
+  is now derived from `AGENT_DEFINITIONS`, so prompts, iteration limits, and
+  output contracts have a single source and cannot drift.
+- **Versioned prompts.** `AGENT_PROMPTS` records `id`, `version`, and a
+  SHA-256 content hash for every prompt. Prompt wording is unchanged from the
+  D1 baseline.
+- **Versioned, typed configuration.** `AgentConfig` gained `prompt` and
+  `outputContract`; `version` is required (`2.0.0`). The catalog validates
+  every definition while it is built.
+- **Validation before execution.** `validateAgentConfig` (Zod) runs at catalog
+  build and on every `agentConfigProvider.resolve`. Unknown tools, empty
+  instructions, duplicate capabilities, zero iterations, or a mismatched
+  output contract fail before any model call. Errors report paths only, never
+  prompt content.
+- **Config hashing.** `hashAgentConfig` canonicalizes key order and hashes the
+  effective config, including the prompt hash and version.
+- **Recorded identity.** `executeNode` resolves the config first, writes
+  `Node.agentConfigVersion` + `Node.agentConfigHash`, and includes both in the
+  `node.running` event.
+- **Reusable agent turn.** `src/hcr/agent-turn` implements the shared loop
+  behind model, tool-runner, and event adapters:
+  - structured output: model → validate → retry with the validation error
+    (bounded at three attempts);
+  - tool output: model → authorise → execute → persist → continue, with
+    context rebuild between iterations;
+  - iteration and wall-clock bounds, usage events, and an explicit
+    completed / incomplete / stopped outcome.
+- **Tool authorization.** The model only receives tools the configuration
+  allows, and an out-of-policy call is denied with a `tool.denied` event even
+  if the model emits it.
+- **Trusted identity stays out.** The turn has no project/user/workspace
+  inputs; adapters inject identity at the execution seam.
+
+### Design decisions
+
+- **Context policy stays with the Context Engine.** Per d-3 Agent 01 §5C,
+  `AgentConfig` does not absorb `contextConfig`; D3 owns retrieval rules.
+  `AGENT_REGISTRY` keeps the node-level context contract.
+- **Output contract lives in agent config** because it describes what the
+  agent produces, while the workflow still decides when to create artifacts.
+- **Hashing is canonical**, not insertion-order dependent; the hash covers
+  instructions and prompt identity, so a version + hash reproduces the run.
+
+### Regression caught by the drills
+
+The turn's structured failure message changed from
+`Failed to parse/validate JSON output ...` to
+`Failed to parse/validate structured_json output ...`. The Temporal adapter
+classifies non-retryable failures by message, so the new wording silently made
+an exhausted validation **retryable**: Temporal retried the activity inline,
+the resume drill's first attempt completed instead of failing, and the drill
+failed loudly. The classifier now matches `Failed to parse/validate` and has a
+regression test. This is exactly why the D1 drills were re-run after D2.
+
+### Commands run and results
+
+| Command / drill | Result |
+|---|---|
+| `bunx prisma migrate status` (local Postgres) | Pass: 15 migrations, schema up to date (no D2 migration) |
+| `bun run typecheck` | Pass |
+| `bun test` | 75 pass, 0 fail |
+| `bun run lint` | Pass |
+| `bun run build` | Pass |
+| `bun scripts/verify-temporal.ts` (mock provider) | Pass: 6 nodes, 4 artifacts, 2 files, 43 events, project IDLE; all nodes recorded config version/hash |
+| `NODE_MAX_ITERATIONS=3 MOCK_NEVER_COMPLETE=1 bun scripts/verify-budget.ts` | Pass: project INCOMPLETE, execution PARTIAL, both tool nodes INCOMPLETE, 2 budget events, 6 files preserved |
+| `MOCK_FAIL_NODE=PLANNER MOCK_FAIL_TIMES=3 bun scripts/verify-resume.ts` | Pass: attempt 1 FAILED at PLANNER, attempt 2 resumed, upstream artifacts stayed v1 |
+
+The local containers were stopped after verification; volumes were preserved.
+
+### Changed files
+
+| File | Change |
+|---|---|
+| `src/hcr/agent-config/types.ts` | `PromptReference`, `OutputContract`, required `version` |
+| `src/hcr/agent-config/prompts.ts` | New: versioned prompt catalog with content hashes |
+| `src/hcr/agent-config/hash.ts` | New: SHA-256 helpers + canonical config hash |
+| `src/hcr/agent-config/tool-names.ts` | New: name-only tool eligibility list |
+| `src/hcr/agent-config/validation.ts` | New: Zod schema, `InvalidAgentConfigError` |
+| `src/hcr/agent-config/definitions.ts` | Single catalog; no longer imports `AGENT_REGISTRY` |
+| `src/hcr/agent-config/provider.ts`, `index.ts` | Validate on resolve; export new surface |
+| `src/hcr/agent-config/constants.ts` | New: schema and catalog versions |
+| `src/hcr/agent-turn/{index,types,run-agent-turn}.ts` | New: reusable turn with fake-able adapters |
+| `src/cognition/agent-registry.ts` | Derived node view + context contracts |
+| `src/cognition/node-executor.ts` | Resolve/record config; use the turn; tool allow-list |
+| `src/providers/index.ts` | Export `NormalizedToolCall` |
+| `src/temporal/contracts/hcr.ts` | Classifier matches the turn's output failure |
+| `tests/hcr-agent-config.test.ts` | Prompt/validation/hash/derivation coverage |
+| `tests/hcr-agent-turn.test.ts` | Fake model + tool adapter loop coverage |
+| `tests/hcr-temporal-verification.test.ts` | Classifier regression case |
+| `tests/bun-test.d.ts` | Matchers used by the new suites |
+| `scripts/verify-temporal.ts` | Assert every node records config version/hash |
+| `docs/architecture/current-state.md` | D2 status and refreshed verification table |
+
+### Not verified in D2
+
+- The real RunAnywhere model was not re-run after D2 (mock drills only).
+- Worker restart mid-activity and cancellation during a tool side effect
+  remain open drills.
+- Session/turn persistence beyond node and tool-call state is not implemented;
+  D3 and the policy/approval work cover the rest.
+
+### Next
+
+**D3 — Context Engine V2.** Typed sources, ranking, token budgets, compaction,
+provenance, and reproducibility after worker restart. D2 unblocks D3 because
+the context policy now hangs off a stable agent configuration.

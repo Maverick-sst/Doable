@@ -2,7 +2,14 @@ import { ArtifactType, NodeStatus, NodeType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { callLLM } from "./llm";
 import * as contextEngine from "@/src/hcr/context-engine/engine";
-import { agentTypeForNode } from "@/src/hcr/agent-config";
+import {
+  agentTypeForNode,
+  agentConfigProvider,
+  hashAgentConfig,
+} from "@/src/hcr/agent-config";
+import type { AgentConfig } from "@/src/hcr/agent-config";
+import { runAgentTurn } from "@/src/hcr/agent-turn";
+import type { AgentTurnEvent } from "@/src/hcr/agent-turn";
 import type { CallerContextInputs } from "@/src/hcr/context-engine";
 import type { LLmMessage } from "@/src/shared/types";
 import { createArtifact } from "@/src/runtime/artifacts/create-artifact";
@@ -154,27 +161,48 @@ async function resolvePromptEmbedding(input: {
   }
 }
 
-async function recordUsage(
+async function recordAgentTurnEvent(
   executionId: string,
   nodeId: string,
   nodeType: NodeType,
-  response: Awaited<ReturnType<typeof callLLM>>,
+  event: AgentTurnEvent,
 ) {
   await prisma.runtimeEvent.create({
     data: {
       executionId,
       nodeId,
-      type: "model.usage",
-      payload: {
-        nodeType,
-        provider: response.provider,
-        model: response.model,
-        promptTokens: response.usage?.promptTokens ?? null,
-        completionTokens: response.usage?.completionTokens ?? null,
-        totalTokens: response.usage?.totalTokens ?? null,
-      },
+      type: event.type,
+      payload: { nodeType, ...event.payload },
     },
   });
+}
+
+/**
+ * Resolve and validate the effective configuration before any model call.
+ * Provider resolution validates, so an invalid catalog fails at the boundary
+ * rather than mid-turn.
+ */
+async function resolveAgentConfig(nodeType: NodeType): Promise<AgentConfig> {
+  return agentConfigProvider.resolve({
+    agentType: agentTypeForNode(nodeType),
+  });
+}
+
+/**
+ * Records the exact configuration a run used. The hash covers the prompt
+ * content, so version + hash reproduce the instructions even if the catalog
+ * later changes.
+ */
+async function recordAgentConfig(
+  nodeId: string,
+  config: AgentConfig,
+): Promise<string> {
+  const hash = hashAgentConfig(config);
+  await prisma.node.update({
+    where: { id: nodeId },
+    data: { agentConfigVersion: config.version, agentConfigHash: hash },
+  });
+  return hash;
 }
 
 async function markNodeIncomplete(
@@ -210,10 +238,15 @@ export async function executeNode(
 ): Promise<ExecuteNodeResult> {
   const { projectId, executionId, nodeId, prompt, nodeConfig } = input;
 
+  // Resolve and record configuration before any model call: an invalid
+  // catalog fails before spending tokens, and the node is reproducible.
+  const agentConfig = await resolveAgentConfig(nodeConfig.nodeType);
+
   // `execution.running` is emitted only on the CREATED -> RUNNING
   // transition, so an activity retry cannot duplicate it.
   const executionStarted = await markExecutionRunning(executionId);
   await markNodeRunning(executionId, nodeId, input.attempt);
+  const agentConfigHash = await recordAgentConfig(nodeId, agentConfig);
 
   const runningEvents: Prisma.RuntimeEventCreateManyInput[] = [];
   if (executionStarted > 0) {
@@ -231,6 +264,8 @@ export async function executeNode(
       nodeId,
       type: nodeConfig.nodeType,
       attempt: input.attempt ?? 1,
+      agentConfigVersion: agentConfig.version,
+      agentConfigHash,
     },
   });
   await prisma.runtimeEvent.createMany({ data: runningEvents });
@@ -257,40 +292,30 @@ export async function executeNode(
       },
     );
 
-    let attempts = 0;
-    let parsedContent: Record<string, unknown> | null = null;
-    const messages = [...contextMessages];
-
-    while (attempts < 3) {
-      try {
-        const response = await callLLM(messages, [], {
-          responseFormat: "json",
-        });
-        await recordUsage(executionId, nodeId, nodeConfig.nodeType, response);
-        const content = response.content ?? "";
-        if (!content.trim()) throw new Error("LLM returned an empty response");
-        parsedContent = cleanAndParseJSON(
+    const outcome = await runAgentTurn({
+      config: agentConfig,
+      mode: "structured_json",
+      messages: contextMessages,
+      model: {
+        call: ({ messages, tools: turnTools, responseFormat }) =>
+          callLLM(messages, turnTools, { responseFormat }),
+      },
+      validateOutput: (content) =>
+        cleanAndParseJSON(
           content,
           nodeConfig.outputArtifactType as ArtifactType,
-        );
-        break;
-      } catch (error) {
-        attempts++;
-        if (attempts >= 3) {
-          throw new Error(
-            `Failed to parse/validate JSON output for ${nodeConfig.nodeType} after 3 attempts: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-        messages.push({
-          role: "user",
-          content: `Your previous response was not valid JSON or did not match the required schema. Error: ${
-            error instanceof Error ? error.message : String(error)
-          }. Return ONLY the valid JSON object with no surrounding text.`,
-        });
-      }
+        ),
+      onEvent: (event) =>
+        recordAgentTurnEvent(executionId, nodeId, nodeConfig.nodeType, event),
+    });
+
+    if (outcome.status !== "completed") {
+      throw new Error(
+        `${nodeConfig.nodeType} structured turn did not complete`,
+      );
     }
+
+    const parsedContent = outcome.output;
 
     const existing = await prisma.artifact.findUnique({ where: { nodeId } });
     if (existing) {
@@ -311,21 +336,8 @@ export async function executeNode(
 
     await markNodeCompleted(executionId, nodeId, nodeConfig.nodeType, artifactId);
   } else {
-    let iterations = 0;
     const budget = resolveNodeBudget(nodeConfig.outputMode);
     const maxIterations = nodeConfig.maxIterations || budget.maxIterations;
-    const startedAt = Date.now();
-    const currentContext = {
-      currentTask: prompt,
-      iteration: 0,
-      scratchpad: [] as string[],
-    };
-    const toolHistory: Array<{
-      role: "assistant" | "tool";
-      content: string | null;
-      tool_calls?: unknown[];
-      tool_call_id?: string;
-    }> = [];
 
     const promptEmbedding = await resolvePromptEmbedding({
       prompt,
@@ -335,150 +347,104 @@ export async function executeNode(
       nodeType: nodeConfig.nodeType,
     });
 
-    let markedComplete = false;
-    let budgetExhausted = false;
-
-    while (iterations < maxIterations) {
-      if (Date.now() - startedAt >= budget.wallClockMs) {
-        budgetExhausted = true;
-        break;
-      }
-      iterations++;
-      const request = await requestNodeContext(
-        { projectId, executionId, nodeId },
-        nodeConfig,
-        prompt,
-        { toolHistory, currentContext, promptEmbedding },
-      );
-
-      const response = await callLLM(request, tools);
-      await recordUsage(executionId, nodeId, nodeConfig.nodeType, response);
-      if (!response.content && response.toolCalls.length === 0) break;
-
-      toolHistory.push({
-        role: "assistant",
-        content: response.content,
-        tool_calls: response.toolCalls.map((call) => ({
-          id: call.id,
-          type: "function" as const,
-          function: { name: call.name, arguments: call.arguments },
-        })),
-      });
-
-      if (response.toolCalls.length === 0) break;
-
-      for (const toolCall of response.toolCalls) {
-        let args: Record<string, string>;
-        try {
-          args = JSON.parse(toolCall.arguments) as Record<string, string>;
-        } catch {
-          toolHistory.push({
-            role: "tool",
-            content: "Error: tool arguments were not valid JSON",
-            tool_call_id: toolCall.id,
-          });
-          continue;
-        }
-
-        await prisma.runtimeEvent.create({
-          data: {
-            executionId,
-            nodeId,
-            type: "tool.called",
-            payload: {
-              tool: toolCall.name,
-              iteration: iterations,
-            },
+    const outcome = await runAgentTurn({
+      config: agentConfig,
+      mode: "tool_calls",
+      messages: [],
+      tools,
+      maxIterations,
+      wallClockMs: budget.wallClockMs,
+      model: {
+        call: ({ messages, tools: turnTools }) =>
+          callLLM(messages, turnTools),
+      },
+      nextMessages: ({ toolHistory, iteration, scratchpad }) =>
+        requestNodeContext(
+          { projectId, executionId, nodeId },
+          nodeConfig,
+          prompt,
+          {
+            toolHistory,
+            currentContext: { currentTask: prompt, iteration, scratchpad },
+            promptEmbedding,
           },
-        });
+        ),
+      toolRunner: {
+        execute: async ({ name, arguments: args, iteration }) => {
+          if (name === "mark_complete") {
+            await executeTool(
+              "mark_complete",
+              args,
+              projectId,
+              input.userId,
+              executionId,
+              nodeId,
+              iteration,
+            );
+            await handleToolCompletion(executionId, nodeId, {
+              tool: "mark_complete",
+              result: "completed",
+              iteration,
+            });
+            return { content: "completed", completesTurn: true };
+          }
 
-        if (toolCall.name === "mark_complete") {
-          await executeTool(
-            "mark_complete",
+          const toolResult = await executeTool(
+            name,
             args,
             projectId,
             input.userId,
             executionId,
             nodeId,
-            iterations,
+            iteration,
           );
+          const shortLog =
+            toolResult.length > 100
+              ? `${toolResult.substring(0, 100)}...`
+              : toolResult;
           await handleToolCompletion(executionId, nodeId, {
-            tool: "mark_complete",
-            result: "completed",
-            iteration: iterations,
+            tool: name,
+            result: shortLog,
+            iteration,
           });
-          toolHistory.push({
-            role: "tool",
-            content: "completed",
-            tool_call_id: toolCall.id,
-          });
-          markedComplete = true;
-          break;
-        }
+          return { content: toolResult };
+        },
+      },
+      onEvent: (event) =>
+        recordAgentTurnEvent(executionId, nodeId, nodeConfig.nodeType, event),
+    });
 
-        const toolResult = await executeTool(
-          toolCall.name,
-          args,
-          projectId,
-          input.userId,
-          executionId,
-          nodeId,
-          iterations,
-        );
-        toolHistory.push({
-          role: "tool",
-          content: toolResult,
-          tool_call_id: toolCall.id,
-        });
-
-        const shortLog =
-          toolResult.length > 100
-            ? `${toolResult.substring(0, 100)}...`
-            : toolResult;
-        await handleToolCompletion(executionId, nodeId, {
-          tool: toolCall.name,
-          result: shortLog,
-          iteration: iterations,
-        });
-        currentContext.scratchpad.push(
-          `[${iterations}]: ${toolCall.name}() -> ${shortLog}`,
-        );
-      }
-
-      if (markedComplete) break;
+    if (outcome.status === "incomplete") {
+      // Work was produced but the budget bound it. That is neither success
+      // nor failure: report it honestly and keep the work.
+      await markNodeIncomplete(
+        executionId,
+        nodeId,
+        nodeConfig.nodeType,
+        `Stopped on budget after ${outcome.iterations} iterations (${Math.round(
+          outcome.elapsedMs / 1000,
+        )}s) without mark_complete`,
+        {
+          iterations: outcome.iterations,
+          maxIterations,
+          elapsedMs: outcome.elapsedMs,
+          wallClockMs: budget.wallClockMs,
+          reason: outcome.reason,
+        },
+      );
+      return {
+        artifactId: null,
+        incomplete: true,
+        nodeType: nodeConfig.nodeType,
+        workflowId: input.workflowId,
+        executionId,
+        projectId,
+        userId: input.userId,
+        prompt,
+      };
     }
 
-    const elapsedMs = Date.now() - startedAt;
-
-    if (!markedComplete) {
-      if (budgetExhausted || iterations >= maxIterations) {
-        // Work was produced but the budget bound it. That is neither success
-        // nor failure: report it honestly and keep the work.
-        await markNodeIncomplete(
-          executionId,
-          nodeId,
-          nodeConfig.nodeType,
-          `Stopped on budget after ${iterations} iterations (${Math.round(elapsedMs / 1000)}s) without mark_complete`,
-          {
-            iterations,
-            maxIterations,
-            elapsedMs,
-            wallClockMs: budget.wallClockMs,
-            reason: budgetExhausted ? "wall_clock" : "iterations",
-          },
-        );
-        return {
-          artifactId: null,
-          incomplete: true,
-          nodeType: nodeConfig.nodeType,
-          workflowId: input.workflowId,
-          executionId,
-          projectId,
-          userId: input.userId,
-          prompt,
-        };
-      }
-
+    if (outcome.status !== "completed") {
       throw new Error(
         `${nodeConfig.nodeType} stopped without calling mark_complete`,
       );

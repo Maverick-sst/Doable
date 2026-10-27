@@ -50,6 +50,13 @@ describe("ARCHITECT failure classification (retry vs terminal)", () => {
         "Failed to parse/validate JSON output for ARCHITECT after 3 attempts",
       ),
     ).toBe(true);
+    // The reusable agent turn reports output exhaustion without naming a
+    // format; it is still terminal, not a transient provider fault.
+    expect(
+      isHcrDomainFailure(
+        "Failed to parse/validate structured_json output after 3 attempts: schema mismatch",
+      ),
+    ).toBe(true);
   });
 
   test("missing records are terminal", () => {

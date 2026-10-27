@@ -16,10 +16,14 @@ declare module "bun:test" {
     toBeGreaterThanOrEqual(expected: number): void;
     toBeLessThan(expected: number): void;
     toContain(expected: unknown): void;
+    toContainEqual(expected: unknown): void;
+    toHaveLength(expected: number): void;
+    toMatch(expected: string | RegExp): void;
     toThrow(expected?: string | RegExp | (new (...args: never[]) => Error)): void;
     not: {
       toBe(expected: unknown): void;
       toBeNull(): void;
+      toThrow(expected?: string | RegExp | (new (...args: never[]) => Error)): void;
     };
   }
   export function expect(actual: unknown): Matchers;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { NodeType } from "@prisma/client";
+import { tools as modelTools } from "@/lib/tools";
 import { AGENT_REGISTRY } from "@/src/cognition/agent-registry";
 import {
   ARCHITECT_SYSTEM_PROMPT,
@@ -10,17 +11,23 @@ import {
   BACKEND_ENGINEER_SYSTEM_PROMPT,
 } from "@/src/cognition/prompts";
 import {
+  AGENT_CATALOG_VERSION,
   AGENT_DEFINITIONS,
+  AGENT_PROMPTS,
   agentConfigProvider,
   agentTypeForNode,
+  hashAgentConfig,
+  InvalidAgentConfigError,
+  KNOWN_TOOL_NAMES,
+  sha256,
   UnknownAgentTypeError,
   UnmappedNodeTypeError,
+  validateAgentConfig,
 } from "@/src/hcr/agent-config";
-import type { AgentType } from "@/src/hcr/agent-config";
+import type { AgentConfig, AgentType } from "@/src/hcr/agent-config";
 
-// Agent Configuration boundary suite (d-3 Agent 01). Pure resolution checks
-// only — no DB, no Temporal server, no Docker. Notably this file never
-// imports `@/lib/tools`: eligibility must be names-only by construction.
+// Agent Configuration boundary suite (d-3 Agent 01). Pure resolution and
+// validation checks only — no DB, no Temporal server, no Docker.
 
 const EXPECTED_AGENTS: AgentType[] = [
   "ARCHITECT",
@@ -63,7 +70,7 @@ describe("Agent catalog (§5A/§5G stable state)", () => {
       expect(config.agentType).toBe(agentType);
       expect(config.instructions.length).toBeGreaterThan(0);
       expect(config.capabilities.length).toBeGreaterThan(0);
-      expect(config.version).toBe("1");
+      expect(config.version).toBe(AGENT_CATALOG_VERSION);
     }
   });
 });
@@ -230,5 +237,142 @@ describe("Execution policy mirror", () => {
         registryEntry?.maxIterations,
       );
     }
+  });
+});
+
+function cloneConfig(agentType: AgentType = "ARCHITECT"): AgentConfig {
+  return JSON.parse(
+    JSON.stringify(AGENT_DEFINITIONS[agentType]),
+  ) as AgentConfig;
+}
+
+describe("Versioned prompt identity (D2)", () => {
+  test("every agent resolves to a versioned prompt matching its instructions", async () => {
+    for (const agentType of EXPECTED_AGENTS) {
+      const config = await agentConfigProvider.resolve({ agentType });
+      const prompt = AGENT_PROMPTS[agentType];
+      expect(config.prompt.id).toBe(prompt.id);
+      expect(config.prompt.version).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(config.prompt.hash).toBe(sha256(prompt.content));
+      expect(config.prompt.hash).toBe(prompt.hash);
+      expect(config.instructions).toBe(prompt.content);
+    }
+  });
+
+  test("prompt hashes are unique per agent", () => {
+    const hashes = EXPECTED_AGENTS.map((agentType) => AGENT_PROMPTS[agentType].hash);
+    expect(new Set(hashes).size).toBe(hashes.length);
+  });
+});
+
+describe("Configuration validation (D2)", () => {
+  test("every built-in configuration validates", () => {
+    for (const agentType of EXPECTED_AGENTS) {
+      expect(() => validateAgentConfig(cloneConfig(agentType))).not.toThrow();
+    }
+  });
+
+  test("invalid configurations fail before execution", () => {
+    const invalidCases: Array<[string, (config: AgentConfig) => void]> = [
+      ["empty instructions", (config) => { config.instructions = ""; }],
+      ["no capabilities", (config) => { config.capabilities = []; }],
+      ["unknown tool name", (config) => { config.toolPolicy.eligibleTools = ["rm_rf"]; }],
+      ["zero iterations", (config) => { config.executionPolicy.maxIterations = 0; }],
+      ["duplicate tools", (config) => {
+        config.toolPolicy.eligibleTools = ["create_file", "create_file"];
+      }],
+      ["missing version", (config) => {
+        delete (config as Partial<AgentConfig>).version;
+      }],
+      ["artifact without structured mode", (config) => {
+        config.outputContract = { artifactType: null, mode: "structured_json" };
+      }],
+    ];
+
+    for (const [label, mutate] of invalidCases) {
+      const candidate = cloneConfig();
+      mutate(candidate);
+      expect(() => validateAgentConfig(candidate, label)).toThrow(
+        InvalidAgentConfigError,
+      );
+    }
+  });
+
+  test("validation reports paths without leaking prompt content", () => {
+    const candidate = cloneConfig();
+    candidate.instructions = "SECRET PROMPT TEXT";
+    candidate.capabilities = [];
+
+    let caught: unknown = null;
+    try {
+      validateAgentConfig(candidate, "test");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught instanceof InvalidAgentConfigError).toBe(true);
+    const error = caught as InvalidAgentConfigError;
+    expect(error.message.includes("SECRET PROMPT TEXT")).toBe(false);
+    expect(error.issues.some((issue) => issue.startsWith("capabilities"))).toBe(
+      true,
+    );
+  });
+
+  test("provider resolution rejects a config the catalog cannot produce", async () => {
+    // The provider re-validates the effective copy, so an experiment marker
+    // cannot smuggle an invalid field past catalog-time validation.
+    const resolved = await agentConfigProvider.resolve({
+      agentType: "ARCHITECT",
+      experimentVariant: "variant-a",
+    });
+    expect(resolved.experiment).toEqual({ variant: "variant-a" });
+    expect(() => validateAgentConfig(resolved)).not.toThrow();
+  });
+});
+
+describe("Configuration hash (D2)", () => {
+  test("hash is stable across key insertion order", () => {
+    const config = cloneConfig();
+    const reordered = Object.fromEntries(
+      Object.entries(config).reverse(),
+    ) as unknown as AgentConfig;
+    expect(hashAgentConfig(config)).toBe(hashAgentConfig(reordered));
+  });
+
+  test("hash changes when instructions change", () => {
+    const before = cloneConfig();
+    const after = cloneConfig();
+    after.instructions = `${after.instructions}\nAdded instruction.`;
+    expect(hashAgentConfig(after)).not.toBe(hashAgentConfig(before));
+  });
+
+  test("hash covers the prompt and config version", () => {
+    const config = cloneConfig();
+    expect(hashAgentConfig(config)).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(config.version).toBe(AGENT_CATALOG_VERSION);
+  });
+});
+
+describe("Derived node registry (D2)", () => {
+  test("AGENT_REGISTRY mirrors the single agent catalog", () => {
+    for (const agentType of EXPECTED_AGENTS) {
+      const nodeType = NODE_FOR_AGENT[agentType];
+      const config = AGENT_DEFINITIONS[agentType];
+      const entry = AGENT_REGISTRY[nodeType];
+      expect(entry).toBeDefined();
+      expect(entry?.systemPrompt).toBe(config.instructions);
+      expect(entry?.maxIterations).toBe(config.executionPolicy.maxIterations);
+      expect(entry?.outputMode).toBe(config.outputContract.mode);
+      expect(entry?.outputArtifactType).toBe(config.outputContract.artifactType);
+      expect(entry?.usesFileTools).toBe(
+        config.toolPolicy.eligibleTools.length > 0,
+      );
+    }
+  });
+
+  test("declared tool names stay in sync with lib/tools.ts", () => {
+    expect(KNOWN_TOOL_NAMES).toEqual(
+      modelTools.map((tool) => tool.function.name),
+    );
   });
 });
