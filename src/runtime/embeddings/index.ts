@@ -38,7 +38,9 @@ export async function embedFileContent(input: {
   });
 
   try {
-    const embedding = await getEmbeddings(text);
+    const embedding = await getEmbeddings(text, {
+      projectId: input.projectId,
+    });
     const vector = `[${embedding.join(",")}]`;
     await prisma.$executeRaw`
       UPDATE "File"

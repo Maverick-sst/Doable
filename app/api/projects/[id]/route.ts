@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
+import { invalidateProjectCache } from "@/src/runtime/cache";
 
 const UpdateProjectSchema = z.object({
   name: z.string().min(1).max(120).optional(),
@@ -142,6 +143,9 @@ export async function DELETE(
   if (deleted.count === 0) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
+
+  // Drop hot entries immediately; the FK cascade removes durable rows.
+  await invalidateProjectCache(id);
 
   return new NextResponse(null, { status: 204 });
 }

@@ -14,6 +14,7 @@ import {
   getTemporalTaskQueue,
 } from "@/src/temporal/client";
 import { getWorkspaceRoot } from "@/src/runtime/workspace";
+import { cacheSnapshot } from "@/src/runtime/cache";
 
 async function checkDatabase(): Promise<{ ok: boolean; error?: string }> {
   try {
@@ -73,6 +74,7 @@ export async function GET() {
     providerCapabilities,
     routing,
     providerHealth: providerHealthSnapshot(),
+    cache: cacheSnapshot(),
     timestamp: new Date().toISOString(),
   };
 

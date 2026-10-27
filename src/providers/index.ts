@@ -70,6 +70,16 @@ export function getProviderCapabilities(): ProviderCapabilities {
  * `getProviderCapabilities`, an unroutable environment is `null` rather than a
  * thrown error, so callers can degrade instead of failing a write.
  */
+/** Stable identity for the selected provider's embedding model. */
+export function getEmbeddingIdentity(): {
+  providerId: string;
+  modelId: string;
+} | null {
+  const provider = getProvider();
+  if (!provider.embeddingModelId) return null;
+  return { providerId: provider.id, modelId: provider.embeddingModelId };
+}
+
 export function getProviderCapabilitiesOrNull(): ProviderCapabilities | null {
   try {
     return getProviderCapabilities();

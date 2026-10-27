@@ -908,9 +908,88 @@ The local containers were stopped after verification; volumes were preserved.
   `bun run lint`, `bun run build`, and `bunx prisma validate` are recorded in
   the handoff.
 
+## D6 — Cache layers with scope, TTL, invalidation — COMPLETE (2026-10-27)
+
+### Scope delivered
+
+- **One cache seam.** `src/runtime/cache` provides `getOrLoad`,
+  `invalidateProjectCache`, `pruneExpiredCache`, and `cacheSnapshot`. Callers
+  never read a store directly.
+- **Scoped, versioned keys.** `buildCacheKey` hashes namespace, scope
+  (`projectId`, `userId`, `agentType`, `configHash`, `providerId`,
+  `modelId`), source version, and source identity. Keys contain a digest only;
+  prompts, file contents, and model output are never key material.
+- **Two layers.** A bounded in-process LRU (`CACHE_HOT_ENTRIES`) fronts a
+  durable `DerivedCache` row. Misses populate both; expired entries are
+  ignored. Concurrent misses for one key share a single load.
+- **Fail-open by construction.** Read/write errors, malformed values, and a
+  disabled cache all fall through to the loader. Metrics record failures; the
+  caller's result is unchanged. Callers may pass a validator, so a poisoned
+  durable value is reloaded rather than trusted.
+- **Embedding reuse.** `lib/embeddings.ts` caches vectors by project,
+  provider, embedding model, and content digest, with
+  `CACHE_EMBEDDING_TTL_DAYS` (default 30). `ModelProvider.embeddingModelId`
+  supplies the model identity, so a provider/model switch cannot reuse a stale
+  vector. File, memory, and prompt embeddings all pass `projectId`.
+- **Telemetry without content.** Prompt embeddings emit `cache.lookup` with
+  namespace, outcome, and key digest. Provider-native prompt-cache usage is
+  normalized to `ChatUsage.cachedPromptTokens` and surfaced on `model.usage`
+  with `promptCacheSource`; Ollama reports `unsupported`.
+- **Invalidation and maintenance hooks.** Project deletion clears hot entries
+  and relies on FK cascade for durable rows. `pruneExpiredCache()` is ready
+  for the D10 maintenance workflow; no new Temporal workflow was added
+  because per-item lazy caching is already idempotent.
+- **Visibility.** `/api/health` exposes `cache`; Settings renders enabled
+  state, hot entries, and per-namespace hit/miss/failure/write counts.
+
+### Files
+
+| File | Change |
+|---|---|
+| `src/runtime/cache/types.ts` | JSON-safe values, scope/key/store/outcome contracts |
+| `src/runtime/cache/keys.ts` | Canonical scoped SHA-256 key + content digest |
+| `src/runtime/cache/memory-store.ts` | Deterministic test/drill adapter |
+| `src/runtime/cache/prisma-store.ts` | Durable adapter; errors propagate to the fail-open layer |
+| `src/runtime/cache/index.ts` | L1/L2 read-through, TTL, validation, dedupe, invalidation, metrics |
+| `prisma/schema.prisma`, `prisma/migrations/20261027150000_v1_5_derived_cache/` | `DerivedCache` model, indexes, project FK cascade |
+| `lib/embeddings.ts` | Project/provider/model-scoped embedding cache |
+| `src/providers/types.ts` | `embeddingModelId`, `cachedPromptTokens` |
+| `src/providers/{ollama,openrouter,runanywhere}.ts` | Embedding identity and prompt-cache usage parsing |
+| `src/providers/index.ts` | `getEmbeddingIdentity()` |
+| `src/cognition/node-executor.ts` | Passes `projectId`; emits `cache.lookup` |
+| `src/runtime/{embeddings,memory/embeddings}.ts` | Pass project scope into embedding cache |
+| `src/hcr/agent-turn/run-agent-turn.ts` | `cachedPromptTokens`, `promptCacheSource` on `model.usage` |
+| `app/api/health/route.ts`, `app/settings/page.tsx` | Cache snapshot and card |
+| `app/api/projects/[id]/route.ts` | Project deletion invalidates hot cache |
+| `tests/cache.test.ts` | Scoping, TTL, invalidation, validation, fallback, dedupe |
+| `scripts/verify-cache.ts` | No-network acceptance drill |
+| `.env.example` | `CACHE_DISABLED`, `CACHE_HOT_ENTRIES`, `CACHE_EMBEDDING_TTL_DAYS` |
+| `docs/architecture/current-state.md` | D6 seam and behavior record |
+
+### Verification
+
+- `bun run typecheck` — pass.
+- `bun test` — 127 pass, 0 fail, 554 expect() calls, 10 files.
+- `bun run lint` — clean.
+- `bun scripts/verify-cache.ts` — PASS.
+- `bunx prisma validate` — pass.
+- `bun run build` — pass.
+
+### Not verified in D6
+
+- The durable adapter was not exercised against a live Postgres in this
+  session; unit tests and the drill use `MemoryCacheStore`. `prisma
+  generate` and `prisma validate` pass, but the migration was authored, not
+  applied to a shared database.
+- Multi-process workers each hold their own hot layer; cross-process
+  invalidation relies on TTL and the durable delete, and was not tested.
+- No context-assembly or project-summary cache consumer yet. The key builder
+  supports agent/config scope, but only embeddings and provider usage
+  metadata are wired.
+- Cache hit-rate impact on latency and cost at production volume is not
+  measured.
+
 ### Next
 
-**D6 — Cache layers with scope, TTL, invalidation.** Cache retrieval, context
-assembly, and provider-independent results behind explicit scope keys; failure
-must affect speed, not correctness. D5 routing decisions are inputs to cache
-keys where model/agent config changes should invalidate.
+**D7 — Policy engine, typed tool registry, durable approvals, MCP adapter.**
+Approvals bind to the exact action; the prompt cannot bypass a denial.

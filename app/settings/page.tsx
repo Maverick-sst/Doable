@@ -44,6 +44,18 @@ type Health = {
     open: boolean;
     openedAt: string | null;
   }>;
+  cache: {
+    enabled: boolean;
+    hotEntries: number;
+    namespaces: Array<{
+      namespace: string;
+      hits: number;
+      misses: number;
+      failures: number;
+      writes: number;
+      invalidations: number;
+    }>;
+  };
   timestamp: string;
 };
 
@@ -223,6 +235,49 @@ export default function SettingsPage() {
                 </div>
               </>
             )}
+          </CardBody>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Derived cache"
+            description="Scoped, versioned derived values. A cache failure falls through to the source, never to a wrong answer."
+          />
+          <CardBody className="space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-zinc-600 dark:text-zinc-300">State</span>
+              <span className="flex items-center gap-2">
+                <Badge tone={health?.cache.enabled ? "success" : "warning"}>
+                  {health?.cache.enabled ? "enabled" : "disabled"}
+                </Badge>
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  {health?.cache.hotEntries ?? 0} hot entries
+                </span>
+              </span>
+            </div>
+            {health && health.cache.namespaces.length > 0 ? (
+              health.cache.namespaces.map((entry) => (
+                <div
+                  key={entry.namespace}
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-2 dark:border-zinc-800"
+                >
+                  <span className="font-medium">{entry.namespace}</span>
+                  <span className="text-zinc-500 dark:text-zinc-400">
+                    {entry.hits} hit(s) · {entry.misses} miss(es) ·{" "}
+                    {entry.failures} failure(s) · {entry.writes} write(s)
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p className="text-zinc-500 dark:text-zinc-400">
+                No lookups yet in this process.
+              </p>
+            )}
+            <p className="text-zinc-500 dark:text-zinc-400">
+              Keys are scoped by project, agent configuration, provider, and
+              model version. Entries expire automatically and are invalidated
+              when a project is deleted.
+            </p>
           </CardBody>
         </Card>
 

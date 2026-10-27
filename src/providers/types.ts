@@ -19,6 +19,8 @@ export type ChatUsage = {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** Provider-reported prompt-cache hit tokens, when the provider exposes it. */
+  cachedPromptTokens?: number;
 };
 
 export type ChatRequest = {
@@ -55,6 +57,8 @@ export type ProviderCapabilities = {
 export interface ModelProvider {
   readonly id: string;
   readonly capabilities: ProviderCapabilities;
+  /** Embedding model identity, so cached vectors invalidate on a model change. */
+  readonly embeddingModelId: string | null;
   chat(request: ChatRequest): Promise<ChatResult>;
   embed(request: EmbeddingRequest): Promise<number[]>;
 }
