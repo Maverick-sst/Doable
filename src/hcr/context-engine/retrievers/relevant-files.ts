@@ -1,13 +1,20 @@
 import { prisma } from "@/lib/prisma";
-import type { RelevantFile } from "@/src/shared/types";
 import type { RelevantFileContext } from "../types";
 
+/** Per-file snippet bound; unchanged from the pre-V2 behavior. */
+export const RELEVANT_FILE_SNIPPET_CHARS = 700;
+
+type RelevantFileRow = {
+  id: string;
+  path: string;
+  content: string;
+  updatedAt: Date;
+};
+
 /**
- * pgvector semantic file retrieval, moved verbatim from `buildNodeContext`.
- * Same filter (`EMBEDDING_SUCCESSFUL` within project), same similarity
- * ordering, same top-5, same 700-char truncation. Empty embeddings yield no
- * rows (the policy-flag gate stays with the orchestrator). No new vector
- * store, model, or ranking — extraction only.
+ * pgvector semantic file retrieval. Same filter (`EMBEDDING_SUCCESSFUL`),
+ * similarity ordering, top-5, and 700-char truncation as before, now with the
+ * file id and `updatedAt` so the selection can report provenance.
  */
 export async function retrieveRelevantFiles(
   projectId: string,
@@ -18,8 +25,8 @@ export async function retrieveRelevantFiles(
   }
 
   const promptEmbeddingString = `[${promptEmbedding.join(",")}]`;
-  const rows = await prisma.$queryRaw<RelevantFile[]>`
-    SELECT id, path, content FROM "File"
+  const rows = await prisma.$queryRaw<RelevantFileRow[]>`
+    SELECT id, path, content, "updatedAt" FROM "File"
     WHERE "projectId" = ${projectId}
       AND "embeddingStatus" = 'EMBEDDING_SUCCESSFUL'
       AND embedding IS NOT NULL
@@ -27,8 +34,11 @@ export async function retrieveRelevantFiles(
     LIMIT 5`;
 
   return rows.map((file) => ({
+    id: file.id,
     path: file.path,
     snippet:
-      file.content.slice(0, 700) + (file.content.length > 700 ? "..." : ""),
+      file.content.slice(0, RELEVANT_FILE_SNIPPET_CHARS) +
+      (file.content.length > RELEVANT_FILE_SNIPPET_CHARS ? "..." : ""),
+    updatedAt: file.updatedAt.toISOString(),
   }));
 }

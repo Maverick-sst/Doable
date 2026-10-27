@@ -10,8 +10,7 @@ import {
 import type { AgentConfig } from "@/src/hcr/agent-config";
 import { runAgentTurn } from "@/src/hcr/agent-turn";
 import type { AgentTurnEvent } from "@/src/hcr/agent-turn";
-import type { CallerContextInputs } from "@/src/hcr/context-engine";
-import type { LLmMessage } from "@/src/shared/types";
+import type { CallerContextInputs, ContextResult } from "@/src/hcr/context-engine";
 import { createArtifact } from "@/src/runtime/artifacts/create-artifact";
 import { executeTool } from "@/lib/tool-executor";
 import { tools } from "@/lib/tools";
@@ -23,7 +22,7 @@ import {
   markExecutionRunning,
   markNodeRunning,
 } from "@/src/runtime/state/transitions";
-import { resolveNodeBudget } from "@/src/runtime/budgets";
+import { resolveContextBudget, resolveNodeBudget } from "@/src/runtime/budgets";
 import { NodeConfig } from "./types/node-config";
 
 export interface ExecuteNodeInput {
@@ -70,7 +69,7 @@ async function requestNodeContext(
   nodeConfig: NodeConfig,
   prompt: string,
   callerInputs: Omit<CallerContextInputs, "systemPrompt" | "outputMode">,
-): Promise<LLmMessage[]> {
+): Promise<ContextResult> {
   const context = await contextEngine.buildContext(
     {
       projectId: identity.projectId,
@@ -80,6 +79,7 @@ async function requestNodeContext(
       task: callerInputs.currentContext.currentTask,
       prompt,
       policy: nodeConfig.contextConfig,
+      budget: { limitTokens: resolveContextBudget() },
     },
     {
       ...callerInputs,
@@ -87,7 +87,30 @@ async function requestNodeContext(
       outputMode: nodeConfig.outputMode,
     },
   );
-  return context.messages;
+
+  // Provenance only: kinds, labels, statuses, counts. No source content.
+  await prisma.runtimeEvent.create({
+    data: {
+      executionId: identity.executionId,
+      nodeId: identity.nodeId,
+      type: "context.assembled",
+      payload: {
+        nodeType: nodeConfig.nodeType,
+        fingerprint: context.fingerprint,
+        // Budget is a plain record; the cast satisfies Prisma's JSON input.
+        budget: context.budget as unknown as Prisma.InputJsonValue,
+        sources: context.sources.map((source) => ({
+          kind: source.kind,
+          label: source.label,
+          status: source.status,
+          inclusion: source.inclusion,
+          reason: source.reason ?? null,
+        })),
+      },
+    },
+  });
+
+  return context;
 }
 
 async function markNodeCompleted(
@@ -295,7 +318,7 @@ export async function executeNode(
     const outcome = await runAgentTurn({
       config: agentConfig,
       mode: "structured_json",
-      messages: contextMessages,
+      messages: contextMessages.messages,
       model: {
         call: ({ messages, tools: turnTools, responseFormat }) =>
           callLLM(messages, turnTools, { responseFormat }),
@@ -358,17 +381,19 @@ export async function executeNode(
         call: ({ messages, tools: turnTools }) =>
           callLLM(messages, turnTools),
       },
-      nextMessages: ({ toolHistory, iteration, scratchpad }) =>
-        requestNodeContext(
-          { projectId, executionId, nodeId },
-          nodeConfig,
-          prompt,
-          {
-            toolHistory,
-            currentContext: { currentTask: prompt, iteration, scratchpad },
-            promptEmbedding,
-          },
-        ),
+      nextMessages: async ({ toolHistory, iteration, scratchpad }) =>
+        (
+          await requestNodeContext(
+            { projectId, executionId, nodeId },
+            nodeConfig,
+            prompt,
+            {
+              toolHistory,
+              currentContext: { currentTask: prompt, iteration, scratchpad },
+              promptEmbedding,
+            },
+          )
+        ).messages,
       toolRunner: {
         execute: async ({ name, arguments: args, iteration }) => {
           if (name === "mark_complete") {

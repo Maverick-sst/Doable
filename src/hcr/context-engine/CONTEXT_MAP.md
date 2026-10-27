@@ -80,3 +80,60 @@ assembleContext → ContextResult`. Against the table above:
   stands, parked).
 - `buildNodeContext` is a signature-stable facade with no live callers;
   `buildContext()` wrapper kept for the dead `hcr-agent` path only.
+
+## V2 — provenance, ranking, budget, compaction (2026-10-27)
+
+V2 keeps the same public entry point (`buildContext`) and the same message
+ordering, but the engine now returns provenance and applies a deterministic
+selection pass between retrieval and assembly.
+
+```text
+ContextRequest (+ optional budget)
+      │
+      ▼
+Policy-gated retrieval
+  artifacts · files · relevant files · messages
+  verification · failures · memory      (opt-in flags)
+      │
+      ▼
+Conversation facts (intent, unresolved questions, pending approvals)
+      │
+      ▼
+selectContext  — dedup · rank · token budget · compaction
+      │
+      ▼
+assembleContext (pure) + sources · notes · facts
+      │
+      ▼
+ContextResult { messages, sources, facts, budget, fingerprint }
+```
+
+**Source manifest.** Every considered source produces a
+`ContextSourceReference` with kind, id, label (path/type/message id), version
+or `updatedAt`, status (`available`/`stale`/`missing`), priority, inclusion,
+and a drop reason. Content never enters the manifest.
+
+**Ranking and budget.** Required sources are charged first and never
+truncated: system prompt, task, prompt, consumed artifacts, and pinned facts.
+Relevant sources follow in operational order (verification, failures, memory,
+relevant files, file tree); optional sources are newest-first (tool history,
+message history, scratchpad). The default ceiling is
+`CONTEXT_TOKEN_BUDGET=60000` estimated tokens (4 chars/token); the node
+executor passes it on every request.
+
+**Compaction.** Over-budget sources are dropped with an explicit
+`=== CONTEXT NOTES ===` entry. Message compaction keeps intent, unresolved
+questions, and pending approvals as required facts, then keeps the newest
+messages that fit. Tool history is trimmed newest-first and orphan tool
+results are pruned when their assistant call was dropped. The file tree is
+capped at 200 paths with a remainder line.
+
+**Reproducibility.** Retrieval has deterministic tie-breaks
+(`createdAt, id`), selection is pure, and `fingerprintContext` hashes only
+stable fields. The node executor records `context.assembled` with the
+fingerprint, budget report, and source references, so two workers assembling
+the same durable state produce the same fingerprint.
+
+**New opt-in policy flags** (default false, so existing node contracts are
+unchanged): `includeVerification`, `includeFailures`, `includeMemory`,
+`maxHistoryMessages`.

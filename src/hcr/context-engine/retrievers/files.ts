@@ -1,17 +1,10 @@
 import { prisma } from "@/lib/prisma";
-
-/** Project file entry as the file-tree section consumes it. */
-export interface ProjectFileEntry {
-  id: string;
-  path: string;
-  embeddingStatus: string;
-}
+import type { ProjectFileEntry } from "../types";
 
 /**
- * Project file-list retrieval, moved verbatim from `node-executor`.
- * Same scope (single project), same selected fields, same empty-project
- * behavior (`[]` when the project row is missing). No filesystem access —
- * this reads the persisted file index only.
+ * Project file-list retrieval. Same scope and selected fields as before, plus
+ * `updatedAt` for provenance. No filesystem access — this reads the persisted
+ * file index only.
  */
 export async function retrieveFiles(
   projectId: string,
@@ -19,8 +12,15 @@ export async function retrieveFiles(
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
-      files: { select: { id: true, path: true, embeddingStatus: true } },
+      files: {
+        select: { id: true, path: true, embeddingStatus: true, updatedAt: true },
+      },
     },
   });
-  return project?.files ?? [];
+  return (project?.files ?? []).map((file) => ({
+    id: file.id,
+    path: file.path,
+    embeddingStatus: file.embeddingStatus,
+    updatedAt: file.updatedAt.toISOString(),
+  }));
 }

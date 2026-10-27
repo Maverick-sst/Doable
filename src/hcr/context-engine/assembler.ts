@@ -1,7 +1,12 @@
 import type { LLmMessage } from "@/src/shared/types";
+import { MAX_FILE_TREE_ENTRIES } from "./selection";
 import type {
   CallerContextInputs,
+  ContextFact,
+  ContextFacts,
   ContextPolicy,
+  HistoryMessage,
+  ProjectFileEntry,
   RelevantFileContext,
   ResolvedArtifact,
 } from "./types";
@@ -16,13 +21,52 @@ export interface AssembleContextInput extends CallerContextInputs {
    */
   task: string;
   /** Engine-resolved file index (replaces former caller-supplied list). */
-  files: Array<{ id: string; path: string; embeddingStatus: string }>;
+  files: ProjectFileEntry[];
   /** Engine-resolved history (replaces former caller-supplied list). */
-  messages: Array<{ role: string; content: string }>;
+  messages: HistoryMessage[];
   policy: ContextPolicy;
   outputMode: "structured_json" | "tool_calls";
   artifacts: ResolvedArtifact[];
   relevantFiles: RelevantFileContext[];
+  /** Facts that must survive compaction (V2). */
+  facts?: ContextFacts;
+  /** Compaction/availability notes (V2). */
+  notes?: string[];
+}
+
+function renderFact(label: string, fact: ContextFact): string {
+  return `- ${label} [message ${fact.messageId}]: ${fact.content}`;
+}
+
+function factsSection(facts: ContextFacts | undefined): string {
+  if (!facts) return "";
+  const lines: string[] = [];
+  if (facts.intent) lines.push(renderFact("Intent", facts.intent));
+  if (facts.unresolvedQuestions.length > 0) {
+    lines.push("Unresolved questions:");
+    for (const fact of facts.unresolvedQuestions) {
+      lines.push(renderFact("", fact));
+    }
+  }
+  if (facts.pendingApprovals.length > 0) {
+    lines.push("Pending approvals:");
+    for (const fact of facts.pendingApprovals) {
+      lines.push(renderFact("", fact));
+    }
+  }
+  if (lines.length === 0) return "";
+  return `
+=== CONVERSATION FACTS ===
+${lines.join("\n")}
+`;
+}
+
+function notesSection(notes: string[] | undefined): string {
+  if (!notes || notes.length === 0) return "";
+  return `
+=== CONTEXT NOTES ===
+${notes.map((note) => `- ${note}`).join("\n")}
+`;
 }
 
 /**
@@ -46,6 +90,8 @@ export function assembleContext(input: AssembleContextInput): LLmMessage[] {
     toolHistory,
     currentContext,
     promptEmbedding,
+    facts,
+    notes,
   } = input;
 
   const consumedArtifactsContent = artifacts.map(
@@ -57,9 +103,17 @@ ${JSON.stringify(artifact.content, null, 2)}
 
   let fileTreeContext = "";
   if (policy.includeFileTree) {
+    const shown = files.slice(0, MAX_FILE_TREE_ENTRIES);
+    const omitted = files.length - shown.length;
+    const listing =
+      files.length > 0
+        ? `${shown.map((f) => f.path).join("\n")}${
+            omitted > 0 ? `\n... and ${omitted} more file(s)` : ""
+          }`
+        : "No files yet!";
     fileTreeContext = `
 === FILE TREE ===
-${files.length > 0 ? files.map((f) => f.path).join("\n") : "No files yet!"}
+${listing}
 `;
   }
 
@@ -134,6 +188,8 @@ ${task}
 ${fileTreeContext}
 ${relevantFilesContext}
 ${scratchpadContext}
+${factsSection(facts)}
+${notesSection(notes)}
   `.trim();
 
   return [
