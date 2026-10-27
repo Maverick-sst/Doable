@@ -12,6 +12,7 @@ import { prisma } from "@/lib/prisma";
 import { callDiscoveryAgent } from "@/src/cognition/discovery-agent";
 import { startDiscoveryWorkflow } from "@/src/runtime/workflows/discovery/start-discovery-workflow";
 import { completeDiscoveryWorkflow } from "@/src/runtime/workflows/discovery/complete-discovery-workflow";
+import { startMemoryCurationWorkflow } from "@/src/temporal/memory-client";
 
 const DiscoveryRequestSchema = z.object({
   prompt: z.string().min(1).max(10_000),
@@ -147,6 +148,22 @@ export async function POST(
         rawMessage: agentResponse.message,
       },
     });
+
+    // Memory curation is best-effort: a discovery turn must never fail
+    // because background maintenance is unavailable.
+    try {
+      await startMemoryCurationWorkflow({
+        projectId,
+        userId: user.id,
+        trigger: "discovery",
+        executionId,
+      });
+    } catch (error) {
+      console.warn("Memory curation start failed after discovery:", {
+        projectId,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
 
     return NextResponse.json({
       message: agentResponse.message,

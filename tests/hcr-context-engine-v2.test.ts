@@ -56,7 +56,7 @@ function baseSelection(): SelectionInput {
     relevantFiles: [],
     verification: [],
     failures: [],
-    memory: null,
+    memories: [],
     messages: [],
     toolHistory: [],
     scratchpad: [],

@@ -25,6 +25,7 @@ import type {
   MarkHcrFailedActivityResult,
 } from "../contracts/hcr";
 import { isHcrDomainFailure } from "../contracts/hcr";
+import { startMemoryCurationWorkflow } from "../memory-client";
 import { HEARTBEAT_INTERVAL_MS as HEARTBEAT_INTERVAL } from "@/src/runtime/budgets";
 
 const HEARTBEAT_INTERVAL_MS = HEARTBEAT_INTERVAL;
@@ -460,6 +461,23 @@ export async function finalizeHcrSlice(
         reason: "One or more nodes stopped on budget",
       })
     : await completeExecution({ projectId, workflowId, executionId });
+
+  // Background curation is independent of build success. A failure to start
+  // (e.g. Temporal unavailable) must not fail the finalized build.
+  try {
+    await startMemoryCurationWorkflow({
+      projectId,
+      userId: identity.userId,
+      trigger: "build",
+      executionId,
+    });
+  } catch (error) {
+    console.warn("Memory curation start failed after build:", {
+      projectId,
+      executionId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
 
   return { doableExecutionId: executionId, finalized: result.transitioned };
 }

@@ -200,8 +200,22 @@ async function main() {
     );
   }
 
+  // Memory curation starts after finalize as its own workflow; wait for its
+  // first pass so the drill proves the wiring, not just the scheduler call.
+  let memoryEntries = 0;
+  const memoryDeadline = Date.now() + 60_000;
+  while (Date.now() < memoryDeadline) {
+    memoryEntries = await prisma.memoryEntry.count({
+      where: { projectId: project.id },
+    });
+    if (memoryEntries > 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  assert(memoryEntries > 0, "memory curation created entries after finalize");
+
   const summary = {
     projectId: project.id,
+    memoryEntries,
     temporalWorkflowId: run.temporalWorkflowId,
     nodes: nodeTypes,
     artifacts: artifactTypes,

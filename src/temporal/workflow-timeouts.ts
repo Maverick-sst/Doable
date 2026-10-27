@@ -25,3 +25,5 @@ export const NODE_SCHEDULE_TO_CLOSE_TIMEOUT = "2 hours" as const;
 
 /** Retry count for node activities. */
 export const NODE_ACTIVITY_ATTEMPTS = 3 as const;
+/** Memory curation: DB passes plus bounded embedding calls. */
+export const MEMORY_ACTIVITY_TIMEOUT = "10 minutes" as const;

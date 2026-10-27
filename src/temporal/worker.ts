@@ -3,6 +3,7 @@ import { Worker } from "@temporalio/worker";
 import * as greetActivities from "./activities/greetActivity";
 import * as pilotActivities from "./activities/pilotActivity";
 import * as hcrActivities from "./activities/hcrActivities";
+import * as memoryActivities from "./activities/memoryActivities";
 
 const TASK_QUEUE = process.env.TEMPORAL_TASK_QUEUE ?? "pilot-queue";
 
@@ -29,7 +30,12 @@ async function run() {
 
   const worker = await Worker.create({
     workflowsPath: path.join(__dirname, "workflows", "index.ts"),
-    activities: { ...greetActivities, ...pilotActivities, ...hcrActivities },
+    activities: {
+      ...greetActivities,
+      ...pilotActivities,
+      ...hcrActivities,
+      ...memoryActivities,
+    },
     taskQueue: TASK_QUEUE,
     namespace: process.env.TEMPORAL_NAMESPACE ?? "default",
   });

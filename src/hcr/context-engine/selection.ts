@@ -42,7 +42,7 @@ export interface SelectionInput {
   relevantFiles: RelevantFileContext[];
   verification: VerificationContext[];
   failures: FailureContext[];
-  memory: MemoryContext | null;
+  memories: MemoryContext[];
   messages: HistoryMessage[];
   toolHistory: ToolHistoryEntry[];
   scratchpad: string[];
@@ -55,7 +55,7 @@ export interface ContextSelection {
   relevantFiles: RelevantFileContext[];
   verification: VerificationContext[];
   failures: FailureContext[];
-  memory: MemoryContext | null;
+  memories: MemoryContext[];
   messages: HistoryMessage[];
   toolHistory: ToolHistoryEntry[];
   scratchpad: string[];
@@ -369,18 +369,18 @@ export function selectContext(input: SelectionInput): ContextSelection {
     }
   }
 
-  let memory: MemoryContext | null = null;
-  if (input.memory) {
-    const tokens = estimateTokens(
-      `${input.memory.summary}${JSON.stringify(input.memory.requirements)}${JSON.stringify(input.memory.techStack)}`,
-    );
+  const memories: MemoryContext[] = [];
+  for (const memory of input.memories) {
+    const tokens = estimateTokens(`[${memory.kind}] ${memory.subject}: ${memory.content}`);
+    const label = `${memory.kind.toLowerCase()}: ${memory.subject}`;
     if (charge(meter, tokens)) {
-      memory = input.memory;
+      memories.push(memory);
       sources.push(
         ref({
           kind: "memory",
-          label: "project memory",
-          updatedAt: input.memory.updatedAt,
+          id: memory.id,
+          label,
+          updatedAt: memory.updatedAt,
           status: "available",
           priority: "relevant",
         }),
@@ -390,8 +390,9 @@ export function selectContext(input: SelectionInput): ContextSelection {
       sources.push(
         ref({
           kind: "memory",
-          label: "project memory",
-          updatedAt: input.memory.updatedAt,
+          id: memory.id,
+          label,
+          updatedAt: memory.updatedAt,
           status: "available",
           priority: "relevant",
           inclusion: "dropped",
@@ -607,7 +608,7 @@ export function selectContext(input: SelectionInput): ContextSelection {
     relevantFiles,
     verification,
     failures,
-    memory,
+    memories,
     messages: keptMessages,
     toolHistory,
     scratchpad: keptScratchpad,

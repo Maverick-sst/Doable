@@ -107,6 +107,7 @@ export interface ContextResult {
   messages: LLmMessage[];
   sources: ContextSourceReference[];
   facts: ContextFacts;
+  memories: MemoryContext[];
   budget: ContextBudgetReport;
   /** Deterministic hash of the resolved selection (no timestamps). */
   fingerprint: string;
@@ -169,12 +170,16 @@ export interface FailureContext {
   finishedAt: string | null;
 }
 
-/** Curated project memory (D4 will extend the layered model). */
+/** One active layered-memory entry, ready for injection. */
 export interface MemoryContext {
-  summary: string;
-  requirements: unknown;
-  techStack: unknown;
+  id: string;
+  kind: string;
+  subject: string;
+  content: string;
+  confidence: number;
   updatedAt: string;
+  sourceKind: string;
+  sourceId: string | null;
 }
 
 /** Tool-loop entry shape shared by the caller and the engine. */
