@@ -23,6 +23,7 @@ declare module "bun:test" {
     not: {
       toBe(expected: unknown): void;
       toBeNull(): void;
+      toContain(expected: unknown): void;
       toThrow(expected?: string | RegExp | (new (...args: never[]) => Error)): void;
     };
   }

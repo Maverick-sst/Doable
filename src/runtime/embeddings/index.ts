@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getEmbeddings } from "@/lib/embeddings";
-import { getProviderCapabilities } from "@/src/providers";
+import { getProviderCapabilitiesOrNull } from "@/src/providers";
 
 const MAX_EMBEDDING_CHARS = 20_000;
 
@@ -20,7 +20,7 @@ export async function embedFileContent(input: {
 
   // Providers without an embedding endpoint must not make every file write
   // attempt a failing network call. Semantic search is optional.
-  if (!getProviderCapabilities().embeddings) {
+  if (!getProviderCapabilitiesOrNull()?.embeddings) {
     return "skipped";
   }
 

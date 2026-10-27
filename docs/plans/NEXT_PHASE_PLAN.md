@@ -826,10 +826,91 @@ The local containers were stopped after verification; volumes were preserved.
 - Cache invalidation on deletion is a documented hook; D6 owns the cache.
 - Memory retrieval quality at production volume is not measured.
 
+## D5 — Model router and usage budgets — COMPLETE (2026-10-27)
+
+### Scope delivered
+
+- **Catalog and capabilities.** `src/providers/catalog.ts` describes each
+  candidate as `provider:model` with locality, context window, max output,
+  and chat/tools/embeddings support. Context windows come from
+  `MODEL_CONTEXT_WINDOW` or per-provider env overrides, never from a model
+  guess.
+- **Routing policy.** `routeModel()` orders explicit request → task profile
+  (`reasoning`, `planning`, `implementation`) → `MODEL_FALLBACKS` → provider
+  default → catalog. Each candidate records an eligibility reason
+  (`local_only`, `unconfigured`, `tools`, `json`, `context_window`,
+  `circuit_open`, `fallback_disabled`).
+- **Local-only egress.** `MODEL_LOCAL_ONLY=true` filters remote candidates
+  before selection, overrides a remote `MODEL_PROVIDER`, and fails closed
+  (`NoEligibleModelError`) when no local endpoint is configured. The public
+  `callChat`/`callEmbeddings` path dispatches only through the router.
+- **Retry and fallback.** `callRoutedChat`/`callRoutedEmbeddings` retry
+  classified transient provider errors within a candidate
+  (`MODEL_MAX_ATTEMPTS`, `MODEL_RETRY_DELAY_MS`) and then walk the ordered
+  fallbacks. Non-retryable errors fail the current route with a safe category.
+- **Circuit breaker.** `src/providers/health.ts` opens a per-provider breaker
+  after `MODEL_CIRCUIT_FAILURES` consecutive failures and skips it for
+  `MODEL_CIRCUIT_COOLDOWN_MS`. State is in-process, so restart closes it.
+- **Token budgeting.** `maxPromptTokensFor` subtracts required output and
+  `MODEL_CONTEXT_SAFETY_TOKENS` from the selected model's context window.
+  `assertModelTokenBudget` enforces the optional per-execution
+  `RUN_TOKEN_BUDGET` against provider-reported usage.
+- **Observability.** Node execution emits `model.routed` (selected model,
+  reason, locality, estimates, candidate reasons) without prompts or output,
+  and `model.routing_failed` (failure class or candidate list).
+  `model.usage` carries optional flat-rate cost telemetry.
+- **Inspection.** `/api/health` includes `routing` and `providerHealth`;
+  Settings renders the live route, egress state, prompt ceiling, candidate
+  evaluation, and breaker state.
+- **Acceptance drill.** `bun scripts/verify-routing.ts` proves local routing,
+  local-only remote exclusion, fail-closed remote-only configuration,
+  fallback order, context overflow rejection, and cost telemetry without a
+  network call.
+
+### Changed files
+
+| File | Change |
+|---|---|
+| `src/providers/catalog.ts` | Candidate descriptors, env context windows |
+| `src/providers/router.ts` | Routing, retries/fallback, routed chat/embeddings, snapshot |
+| `src/providers/index.ts` | Local-only-aware default selection, routed public calls |
+| `src/providers/errors.ts` | `NoEligibleModelError`, `ProviderUnavailableError`, classification |
+| `src/providers/health.ts` | Per-process circuit breaker |
+| `src/providers/cost.ts` | Optional flat-rate usage estimate |
+| `src/providers/types.ts` | Snapshot/embedding result contracts |
+| `src/runtime/model-budget.ts` | Execution token ceiling |
+| `src/cognition/node-executor.ts` | Routed calls, model-aware context, routing events |
+| `src/hcr/agent-turn/run-agent-turn.ts` | Cost fields on `model.usage` |
+| `app/api/health/route.ts` | Routing and breaker snapshot |
+| `app/settings/page.tsx` | Route/egress/candidate/breaker card |
+| `tests/provider-routing.test.ts` | Routing, local-only, fallback, cost, budget tests |
+| `tests/provider-selection.test.ts` | Local-only default selection |
+| `scripts/verify-routing.ts` | No-network acceptance drill |
+| `.env.example` | D5 routing, egress, retry, breaker, budget, cost vars |
+| `docs/architecture/current-state.md` | D5 seam and behavior record |
+| `src/hcr/agent-config/{types.ts,CATALOG.md}` | Model Router is now D5, not future |
+
+### Not verified in D5
+
+- Real remote fallback under a live provider outage and real latency/cost
+  differences between models. Tests and the drill use stub providers.
+- Circuit breaker state is per worker process; multi-worker coordination and
+  restart recovery are not modeled.
+- Cost is a flat-rate telemetry estimate from env; it is not provider
+  billing and does not model per-model pricing.
+- Routing quality (whether `reasoning` vs `implementation` picks the best
+  model) is a policy choice, not measured.
+- Local-only with an invalid remote-only environment still exposes the
+  configuration error through `routingSnapshot`; optional embedding paths use
+  `getProviderCapabilitiesOrNull` and skip instead of failing a write. The
+  live file-write path was not exercised in that invalid configuration.
+- `bun scripts/verify-routing.ts` passes; `bun test`, `bun run typecheck`,
+  `bun run lint`, `bun run build`, and `bunx prisma validate` are recorded in
+  the handoff.
+
 ### Next
 
-**D5 — Model router and usage budgets.** Capabilities (including context
-window), role/task routing, local-only enforcement, fallback, health checks,
-circuit breaking, and usage/cost accounting. The 60k context budget becomes
-model-aware here (the user accepted 60k as the current default for future
-experiments).
+**D6 — Cache layers with scope, TTL, invalidation.** Cache retrieval, context
+assembly, and provider-independent results behind explicit scope keys; failure
+must affect speed, not correctness. D5 routing decisions are inputs to cache
+keys where model/agent config changes should invalidate.

@@ -45,8 +45,9 @@ to a small loaded set per execution.
 ## Model-router boundary (§7)
 
 `modelPolicy` carries `{ taskProfile, allowFallback }` hints only. Provider
-selection, invocation, fallback execution, health, and cost live in the
-future Model Router. This boundary never reads model env or calls a provider.
+selection, invocation, fallback execution, health, and cost live in the Model
+Router (`src/providers`, D5). This boundary never reads model env or calls a
+provider.
 
 ## Session/context boundary (§10)
 

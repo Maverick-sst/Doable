@@ -33,7 +33,7 @@ embedding job have been removed. File embeddings now run through
 | Seam | Interface | Responsibility |
 |---|---|---|
 | `src/auth` | `getCurrentUser`, `requireDbUser` | Local single-user profile; optional hosted adapter |
-| `src/providers` | `ModelProvider.chat/embed` + `capabilities` | Ollama, OpenRouter, RunAnywhere adapters |
+| `src/providers` | `callChat`/`callEmbeddings`, `routeModel`, `routingSnapshot` | Adapters + D5 routing, local-only egress, retries, circuit breaker, usage/cost |
 | `src/runtime/state` | `failExecution`, `completeExecution`, `cancelExecution` | One idempotent state transition |
 | `src/runtime/artifacts` | `createArtifact`, `getLatestArtifact` | Project-wide artifact revisions, hashes, events |
 | `src/runtime/files` | `create/read/update/delete/listProjectFile` | DB metadata + workspace bytes + embeddings |
@@ -196,6 +196,40 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
   recent/confident entries) and falls back to the legacy `ProjectMemory`
   summary before curation has produced rows.
 
+## Model router and usage budgets (D5, 2026-10-27)
+
+- `src/providers/catalog.ts` declares every candidate as `provider:model`
+  with locality, context window, max output, and capabilities. Context comes
+  from `MODEL_CONTEXT_WINDOW` or per-provider overrides; model lists,
+  fallbacks, and profile routes come from env.
+- `routeModel()` is deterministic: explicit request, task profile
+  (`reasoning`/`planning`/`implementation`), `MODEL_FALLBACKS`, provider
+  default, catalog. Each candidate carries `eligible` plus a reason
+  (`local_only`, `unconfigured`, `tools`, `json`, `context_window`,
+  `circuit_open`, `fallback_disabled`).
+- `MODEL_LOCAL_ONLY=true` drops every remote candidate before selection. It
+  also overrides a remote `MODEL_PROVIDER`, and an environment with no local
+  endpoint fails closed with `NoEligibleModelError` instead of emitting to
+  remote.
+- `callRoutedChat`/`callRoutedEmbeddings` dispatch only after routing, retry
+  classified transient failures within a candidate (`MODEL_MAX_ATTEMPTS`),
+  then walk fallbacks. `index.ts` public calls use the same path.
+- The per-process circuit breaker (`health.ts`) opens after
+  `MODEL_CIRCUIT_FAILURES` and skips the provider for
+  `MODEL_CIRCUIT_COOLDOWN_MS`. It is intentionally in-process; restart resets
+  it.
+- Token ceilings are model-aware: `maxPromptTokensFor` subtracts required
+  output and safety margin. `assertModelTokenBudget` enforces the optional
+  per-execution `RUN_TOKEN_BUDGET` against provider-reported usage.
+- `model.routed` records the decision, candidate reasons, locality, and
+  estimates (never prompts). `model.routing_failed` records the failure class
+  or candidate list. `model.usage` adds optional flat-rate
+  `estimatedCostUsd` from `MODEL_INPUT_COST_PER_1K_USD` /
+  `MODEL_OUTPUT_COST_PER_1K_USD`.
+- `/api/health` exposes `routing` and `providerHealth`; Settings renders the
+  live route, egress state, prompt ceiling, candidate reasons, and breaker
+  state. `bun scripts/verify-routing.ts` is the no-network acceptance drill.
+
 ## Not yet verified
 
 
@@ -214,7 +248,6 @@ These are the next verification gates; do not claim them until they run.
 - Verification workflow/sandbox (the `VerificationReport` model exists; the
   runner does not).
 - Bounded repair workflow.
-- Model routing by role and cost accounting.
 - Model-assisted memory extraction (D4 curation is deterministic).
 - Desktop shell packaging.
 - REA/Alan feature-gap matrix (evidence not collected yet).

@@ -34,9 +34,9 @@ export interface ToolPolicyReference {
 }
 
 /**
- * Model preferences/constraints for the future Model Router. Expresses wishes,
- * never invocation: no provider calls, no env reads, no model strings bound
- * to a vendor contract the router doesn't own yet.
+ * Model preferences/constraints consumed by the Model Router (D5). Expresses
+ * wishes, never invocation: no provider calls, no env reads, no model strings
+ * bound to a vendor contract the agent catalog does not own.
  */
 export type ModelTaskProfile = "reasoning" | "planning" | "implementation";
 

@@ -1,6 +1,6 @@
 import { ArtifactType, NodeStatus, NodeType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { callLLM } from "./llm";
+
 import * as contextEngine from "@/src/hcr/context-engine/engine";
 import {
   agentTypeForNode,
@@ -15,7 +15,17 @@ import { createArtifact } from "@/src/runtime/artifacts/create-artifact";
 import { executeTool } from "@/lib/tool-executor";
 import { tools } from "@/lib/tools";
 import { getEmbeddings } from "@/lib/embeddings";
-import { getProviderCapabilities } from "@/src/providers";
+import {
+  callRoutedChat,
+  estimateMessagesTokens,
+  getProviderCapabilitiesOrNull,
+  NoEligibleModelError,
+  ProviderUnavailableError,
+  resolveLocalOnly,
+  routeModel,
+} from "@/src/providers";
+import type { RouteRequirements } from "@/src/providers";
+import { assertModelTokenBudget } from "@/src/runtime/model-budget";
 import { handleToolCompletion } from "@/lib/toolCompletion";
 import { validateArtifact } from "./types/artifact-validators";
 import {
@@ -69,6 +79,7 @@ async function requestNodeContext(
   nodeConfig: NodeConfig,
   prompt: string,
   callerInputs: Omit<CallerContextInputs, "systemPrompt" | "outputMode">,
+  limitTokens: number,
 ): Promise<ContextResult> {
   const context = await contextEngine.buildContext(
     {
@@ -79,7 +90,7 @@ async function requestNodeContext(
       task: callerInputs.currentContext.currentTask,
       prompt,
       policy: nodeConfig.contextConfig,
-      budget: { limitTokens: resolveContextBudget() },
+      budget: { limitTokens },
     },
     {
       ...callerInputs,
@@ -111,6 +122,109 @@ async function requestNodeContext(
   });
 
   return context;
+}
+
+/**
+ * Records the routing decision (not the prompt) so an operator can explain
+ * which model ran and why, and whether local-only was enforced.
+ */
+async function recordModelRouted(
+  executionId: string,
+  nodeId: string,
+  nodeType: NodeType,
+  decision: Awaited<ReturnType<typeof callRoutedChat>>["decision"],
+  attempts: number,
+) {
+  await prisma.runtimeEvent.create({
+    data: {
+      executionId,
+      nodeId,
+      type: "model.routed",
+      payload: {
+        nodeType,
+        modelId: decision.modelId,
+        providerId: decision.providerId,
+        model: decision.model.model,
+        reason: decision.reason,
+        localOnly: decision.localOnly,
+        contextWindow: decision.contextWindow,
+        maxPromptTokens: decision.maxPromptTokens,
+        requiredOutputTokens: decision.requiredOutputTokens,
+        estimatedPromptTokens: decision.estimatedPromptTokens,
+        attempts,
+        candidates: decision.candidates.slice(0, 8).map((candidate) => ({
+          id: candidate.id,
+          eligible: candidate.eligible,
+          reason: candidate.reason,
+        })),
+      },
+    },
+  });
+}
+
+function createModelAdapter(input: {
+  executionId: string;
+  nodeId: string;
+  nodeType: NodeType;
+  requirements: RouteRequirements;
+}) {
+  return {
+    async call({
+      messages,
+      tools,
+      responseFormat,
+    }: {
+      messages: Parameters<typeof callRoutedChat>[1]["messages"];
+      tools: Parameters<typeof callRoutedChat>[1]["tools"];
+      responseFormat?: "text" | "json";
+    }) {
+      await assertModelTokenBudget(input.executionId);
+      try {
+        const { result, decision, attempts } = await callRoutedChat(
+          {
+            ...input.requirements,
+            estimatedPromptTokens: estimateMessagesTokens(messages),
+          },
+          { messages, tools, responseFormat },
+        );
+        await recordModelRouted(
+          input.executionId,
+          input.nodeId,
+          input.nodeType,
+          decision,
+          attempts,
+        );
+        return result;
+      } catch (error) {
+        // Record why routing failed without persisting prompts or model
+        // output. A failed route is evidence for the operator, not a payload.
+        const payload =
+          error instanceof ProviderUnavailableError
+            ? {
+                category: error.category,
+                attempts: error.attempts,
+                modelsTried: error.modelsTried,
+              }
+            : error instanceof NoEligibleModelError
+              ? { candidates: error.candidates }
+              : { category: "unclassified" };
+        await prisma.runtimeEvent.create({
+          data: {
+            executionId: input.executionId,
+            nodeId: input.nodeId,
+            type: "model.routing_failed",
+            payload: {
+              nodeType: input.nodeType,
+              localOnly:
+                input.requirements.localOnly ?? resolveLocalOnly(),
+              ...payload,
+            },
+          },
+        });
+        throw error;
+      }
+    },
+  };
 }
 
 async function markNodeCompleted(
@@ -150,7 +264,8 @@ async function resolvePromptEmbedding(input: {
 }): Promise<number[]> {
   if (!input.enabled) return [];
 
-  if (!getProviderCapabilities().embeddings) {
+  const capabilities = getProviderCapabilitiesOrNull();
+  if (!capabilities?.embeddings) {
     await prisma.runtimeEvent.create({
       data: {
         executionId: input.executionId,
@@ -158,7 +273,9 @@ async function resolvePromptEmbedding(input: {
         type: "embeddings.skipped",
         payload: {
           nodeType: input.nodeType,
-          reason: "provider_without_embeddings",
+          reason: capabilities
+            ? "provider_without_embeddings"
+            : "no_eligible_provider",
         },
       },
     });
@@ -264,6 +381,20 @@ export async function executeNode(
   // Resolve and record configuration before any model call: an invalid
   // catalog fails before spending tokens, and the node is reproducible.
   const agentConfig = await resolveAgentConfig(nodeConfig.nodeType);
+  const routingRequirements: RouteRequirements = {
+    taskProfile: agentConfig.modelPolicy.taskProfile,
+    needsTools: nodeConfig.outputMode === "tool_calls",
+    needsJson: nodeConfig.outputMode === "structured_json",
+    localOnly: resolveLocalOnly(),
+    allowFallback: agentConfig.modelPolicy.allowFallback,
+  };
+  // Route before any DB transition or model call: an unroutable node fails
+  // fast with an actionable configuration error.
+  const initialRoute = routeModel(routingRequirements);
+  const contextLimit = Math.min(
+    resolveContextBudget(),
+    initialRoute.maxPromptTokens,
+  );
 
   // `execution.running` is emitted only on the CREATED -> RUNNING
   // transition, so an activity retry cannot duplicate it.
@@ -313,16 +444,21 @@ export async function executeNode(
         currentContext: { currentTask: prompt, iteration: 0, scratchpad: [] },
         promptEmbedding,
       },
+      contextLimit,
     );
+
+    const modelAdapter = createModelAdapter({
+      executionId,
+      nodeId,
+      nodeType: nodeConfig.nodeType,
+      requirements: routingRequirements,
+    });
 
     const outcome = await runAgentTurn({
       config: agentConfig,
       mode: "structured_json",
       messages: contextMessages.messages,
-      model: {
-        call: ({ messages, tools: turnTools, responseFormat }) =>
-          callLLM(messages, turnTools, { responseFormat }),
-      },
+      model: modelAdapter,
       validateOutput: (content) =>
         cleanAndParseJSON(
           content,
@@ -377,10 +513,12 @@ export async function executeNode(
       tools,
       maxIterations,
       wallClockMs: budget.wallClockMs,
-      model: {
-        call: ({ messages, tools: turnTools }) =>
-          callLLM(messages, turnTools),
-      },
+      model: createModelAdapter({
+        executionId,
+        nodeId,
+        nodeType: nodeConfig.nodeType,
+        requirements: routingRequirements,
+      }),
       nextMessages: async ({ toolHistory, iteration, scratchpad }) =>
         (
           await requestNodeContext(
@@ -392,6 +530,7 @@ export async function executeNode(
               currentContext: { currentTask: prompt, iteration, scratchpad },
               promptEmbedding,
             },
+            contextLimit,
           )
         ).messages,
       toolRunner: {
