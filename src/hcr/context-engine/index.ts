@@ -33,7 +33,10 @@ export {
 } from "./retrievers/message-history";
 export { retrieveVerificationReports } from "./retrievers/verification";
 export { retrieveFailures } from "./retrievers/failures";
-export { retrieveProjectMemory } from "./retrievers/memory";
+export {
+  retrieveMemoryEntries,
+  DEFAULT_MEMORY_LIMIT,
+} from "./retrievers/memory";
 export { extractConversationFacts, pinnedFactMessageIds } from "./facts";
 export {
   DEFAULT_CONTEXT_TOKEN_BUDGET,

@@ -137,3 +137,8 @@ the same durable state produce the same fingerprint.
 **New opt-in policy flags** (default false, so existing node contracts are
 unchanged): `includeVerification`, `includeFailures`, `includeMemory`,
 `maxHistoryMessages`.
+
+**D4 note.** `includeMemory` now retrieves layered `MemoryEntry` rows
+(vector matches first, then recent/confident entries) instead of only the
+`ProjectMemory` summary. The legacy summary remains the fallback until
+curation has produced rows.

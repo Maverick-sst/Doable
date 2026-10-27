@@ -26,8 +26,9 @@ they intersect.
 - **Summarization models.** Compaction is structural (pinning, truncation,
   omission notes), not model-generated summaries. A summarizer is a separate
   quality/verification decision.
-- **Layered memory.** D3 retrieves the single `ProjectMemory` row only when
-  `includeMemory` is set. Working/episodic/semantic memory is D4.
+- **Model-assisted memory extraction.** D4 persisted layered memory with
+  deterministic curation. An LLM curator, USER-scoped product surface, and
+  memory retrieval quality measurement are follow-ups.
 - **Architectural memory.** No memory-provider migration.
 - **`buildContext()` compatibility facade.** The old ARCHITECT-pinned wrapper
   is gone from the live path; only the single `buildContext` entry point

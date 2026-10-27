@@ -6,6 +6,7 @@ import type {
   ContextFacts,
   ContextPolicy,
   HistoryMessage,
+  MemoryContext,
   ProjectFileEntry,
   RelevantFileContext,
   ResolvedArtifact,
@@ -30,6 +31,8 @@ export interface AssembleContextInput extends CallerContextInputs {
   relevantFiles: RelevantFileContext[];
   /** Facts that must survive compaction (V2). */
   facts?: ContextFacts;
+  /** Layered memory entries selected for this call. */
+  memories?: MemoryContext[];
   /** Compaction/availability notes (V2). */
   notes?: string[];
 }
@@ -90,6 +93,7 @@ export function assembleContext(input: AssembleContextInput): LLmMessage[] {
     toolHistory,
     currentContext,
     promptEmbedding,
+    memories,
     facts,
     notes,
   } = input;
@@ -100,6 +104,16 @@ export function assembleContext(input: AssembleContextInput): LLmMessage[] {
 ${JSON.stringify(artifact.content, null, 2)}
 `,
   );
+
+  const memoryContext =
+    memories && memories.length > 0
+      ? `
+=== PROJECT MEMORY ===
+${memories
+  .map((memory) => `- [${memory.kind}] ${memory.subject}: ${memory.content}`)
+  .join("\n")}
+`
+      : "";
 
   let fileTreeContext = "";
   if (policy.includeFileTree) {
@@ -182,7 +196,7 @@ ${currentContext.scratchpad.slice(-8).join("\n") || "No previous steps yet"}
 
   const userContent = `
 ${consumedArtifactsContent.join("\n")}
-
+${memoryContext}
 === CURRENT TASK ===
 ${task}
 ${fileTreeContext}

@@ -710,3 +710,126 @@ The local containers were stopped after verification; volumes were preserved.
 and preference memory with provenance, conflicts, retention, deletion
 propagation, and a bounded curation workflow. D3 leaves the memory source and
 provenance contract ready to extend.
+
+## D4 — Layered memory and curation — COMPLETE (2026-10-27)
+
+### Scope delivered
+
+- **Schema.** `MemoryEntry` (migration `v1_4_layered_memory`) stores kind,
+  scope, subject, content, structured data, confidence, provenance
+  (`sourceKind`, `sourceId`, `sourceRefs`), content hash/key, supersession,
+  deletion, expiry, and a 768-d pgvector embedding.
+- **Kinds.** Episodic, semantic, procedural, and preference are persisted.
+  Working memory stays ephemeral in the context engine
+  (scratchpad/tool history) and is documented as such.
+- **Provenance.** Every entry points at the durable object that produced it
+  (project memory, verification report, execution, or message). Retrieval
+  carries the same references into the context manifest.
+- **Curation sources.** Deterministic collection from `ProjectMemory`
+  (summary/requirements/tech stack), latest verification per command, recent
+  executions, and user messages carrying preference language.
+- **Conflict policy.** Identical content is a no-op; an active user correction
+  outranks curated memory; a correction supersedes curated content; otherwise
+  newer curated content supersedes older. Superseded rows are retained with a
+  `supersededById` link.
+- **Retention and deletion.** Episodic entries expire after
+  `MEMORY_EPISODIC_RETENTION_DAYS` (default 90). Pruning soft-deletes and
+  clears vectors. `deleteMemorySubject` removes every version of a logical
+  memory and clears derived embeddings; future caches must subscribe here.
+- **Embeddings.** New entries are embedded through the provider seam (bounded
+  batch). A provider without embedding support leaves rows pending; an
+  embedding failure marks only that row.
+- **Retrieval.** The Context Engine retrieves layered memory with vector
+  matches first, then recent/confident entries, and falls back to the legacy
+  `ProjectMemory` summary before curation has produced rows. D3 budgeting,
+  provenance, and fingerprinting apply unchanged.
+- **Orchestration.** `memoryCurationWorkflow` runs as its own Temporal
+  workflow after build finalize and after discovery. It is bounded,
+  idempotent, and its failure cannot fail a build.
+
+### Design decisions
+
+- **Deterministic curation, not model curation.** Every candidate is derived
+  from durable product state with an explicit subject. This keeps curation
+  replayable and cheap; model-assisted extraction is a later quality
+  improvement, not a D4 dependency.
+- **`contentKey` is the idempotency key** (scope + owner + kind + subject +
+  content hash). Replays insert nothing; supersession keeps audit history.
+- **Vector-first retrieval, recency fallback.** Memory embeddings improve
+  ranking when available; lexical/recency order keeps retrieval working when
+  embeddings are pending or disabled.
+- **Background maintenance is isolated.** Curation starts after finalize and
+  is caught at the call site, so a Temporal or provider problem cannot change
+  build success.
+
+### Constraint discovered and handled
+
+The graph drill deleted its project immediately after curation inserted rows,
+while the embedding activity still held ids. `prisma.memoryEntry.update`
+raised `P2025`, the activity retried, and the curation workflow failed. The
+embedding path now uses `updateMany` and treats a zero-row claim as a skip, so
+project deletion mid-curation is a no-op rather than a failure.
+
+### Commands run and results
+
+| Command / drill | Result |
+|---|---|
+| `prisma migrate deploy` on local Postgres | Pass: `v1_4_layered_memory` applied |
+| `prisma migrate diff --from-config-datasource --to-schema ... --exit-code` | `0` — no drift |
+| `bun run typecheck` | Pass |
+| `bun test` | 97 pass, 0 fail |
+| `bun run lint` | Pass |
+| `bun run build` | Pass |
+| `bun scripts/verify-memory.ts` (mock embeddings) | Pass: 9 entries across all four kinds, 9 embedded, replay inserted 0/unchanged 9, user correction survived re-curation, 2 versions deleted, retrieval excluded the deleted subject |
+| `bun scripts/verify-context.ts` | Pass: compaction unchanged; memory source still present via layered/legacy retrieval |
+| `bun scripts/verify-temporal.ts` | Pass: 6 nodes, 4 artifacts, 2 files, 51 events, 3 memory entries after finalize |
+| `NODE_MAX_ITERATIONS=3 MOCK_NEVER_COMPLETE=1 bun scripts/verify-budget.ts` | Pass: INCOMPLETE/PARTIAL, 2 budget events, 6 files preserved |
+| `MOCK_FAIL_NODE=PLANNER MOCK_FAIL_TIMES=3 bun scripts/verify-resume.ts` | Pass: attempt 1 FAILED, attempt 2 resumed, upstream artifacts stayed v1 |
+
+The local containers were stopped after verification; volumes were preserved.
+
+### Changed files
+
+| File | Change |
+|---|---|
+| `prisma/schema.prisma` | Memory enums, `MemoryEntry`, relations |
+| `prisma/migrations/20261027094724_v1_4_layered_memory/` | New memory table + indexes + FKs |
+| `src/runtime/memory/policy.ts` | Content identity, expiry, merge policy |
+| `src/runtime/memory/types.ts` | Candidate/result contracts |
+| `src/runtime/memory/candidates.ts` | Deterministic candidate collection |
+| `src/runtime/memory/merge.ts` | Idempotent merge + supersession |
+| `src/runtime/memory/embeddings.ts` | Bounded embedding with no-op-safe updates |
+| `src/runtime/memory/curation.ts` | Curation pass, pruning, deletion, corrections |
+| `src/runtime/memory/index.ts` | Memory module surface |
+| `src/hcr/context-engine/retrievers/memory.ts` | Layered retrieval (vector + recent + legacy fallback) |
+| `src/hcr/context-engine/{types,selection,assembler,engine,index}.ts` | Memory arrays, per-entry provenance/budget, prompt section |
+| `src/temporal/contracts/memory.ts` | Workflow/activity contracts |
+| `src/temporal/workflows/memoryCurationWorkflow.ts` | Bounded curation workflow |
+| `src/temporal/activities/memoryActivities.ts` | Curation activities |
+| `src/temporal/memory-client.ts` | Idempotent workflow start |
+| `src/temporal/worker.ts`, `workflows/index.ts` | Register memory workflow/activities |
+| `src/temporal/activities/hcrActivities.ts` | Start curation after finalize |
+| `app/api/projects/[id]/discovery/route.ts` | Start curation after discovery |
+| `tests/hcr-memory.test.ts` | Policy + context integration |
+| `scripts/verify-memory.ts` | New DB acceptance drill |
+| `scripts/verify-temporal.ts` | Assert post-finalize memory entries |
+| `.env.example` | `MEMORY_EPISODIC_RETENTION_DAYS` |
+| `docs/adr/0002-layered-memory.md` | Decision record |
+
+### Not verified in D4
+
+- Real-provider embeddings and real-model preference extraction (mock
+  provider only; curation is deterministic).
+- USER-scoped memory has schema and merge support but no product surface or
+  curation source yet.
+- Model-assisted curation/summarization is not implemented.
+- Cache invalidation on deletion is a documented hook; D6 owns the cache.
+- Memory retrieval quality at production volume is not measured.
+
+### Next
+
+**D5 — Model router and usage budgets.** Capabilities (including context
+window), role/task routing, local-only enforcement, fallback, health checks,
+circuit breaking, and usage/cost accounting. The 60k context budget becomes
+model-aware here (the user accepted 60k as the current default for future
+experiments).

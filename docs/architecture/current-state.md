@@ -97,15 +97,16 @@ Run on the current worktree:
 | Command / drill | Result |
 |---|---|
 | `bunx tsc --noEmit --incremental false` | Pass |
-| `bun test` | 87 pass, 0 fail |
+| `bun test` | 97 pass, 0 fail |
 | `bun run lint` (scoped TS/TSX) | Pass |
 | `bun run build` | Pass |
 | `bunx prisma validate` | Pass |
 | `prisma migrate status` on local Postgres | 15 migrations, schema up to date |
 | `scripts/verify-local.ts` | Pass: artifact revisions, one-active-build lock, failure, cancel, late-completion guard, workspace, ZIP |
 | `bun run temporal:hello` | Pass: `Hello, World from Temporal!` |
-| `scripts/verify-temporal.ts` with mock provider | Pass: 6 nodes, 4 build artifacts, 2 files, 51 events, project IDLE; every node records `agentConfigVersion` + `agentConfigHash` and a `context.assembled` fingerprint |
+| `scripts/verify-temporal.ts` with mock provider | Pass: 6 nodes, 4 build artifacts, 2 files, 51 events, project IDLE; every node records `agentConfigVersion` + `agentConfigHash` and a `context.assembled` fingerprint; post-finalize curation created 3 memory entries |
 | `scripts/verify-context.ts` (local Postgres) | Pass: 67 messages compacted into 1,000 tokens, facts preserved, stale verification visible, fingerprint stable |
+| `scripts/verify-memory.ts` (local Postgres + mock embeddings) | Pass: 9 entries across semantic/procedural/episodic/preference, 9 embedded, replay inserted 0, user correction superseded curated value, deletion removed 2 versions, retrieval excluded deleted memory |
 | `scripts/verify-budget.ts` with `NODE_MAX_ITERATIONS=3` | Pass: project INCOMPLETE, execution PARTIAL, 2 budget events, 6 files preserved |
 | `scripts/verify-resume.ts` with `MOCK_FAIL_NODE=PLANNER` | Pass: attempt 1 FAILED, attempt 2 resumed at PLANNER, upstream artifacts stayed v1 |
 | `scripts/verify-failure.ts` with `MOCK_FAIL_NODE=PLANNER` | Pass: PLANNER FAILED, ARCHITECT COMPLETED, exactly one `node.failed` |
@@ -174,6 +175,27 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
 - The six HCR agents keep their existing context shape (V2 flags off, large
   default budget); parity is locked by tests.
 
+## Layered memory and curation (D4, 2026-10-27)
+
+- `MemoryEntry` stores episodic, semantic, procedural, and preference memory
+  with kind, scope, subject, content, provenance, confidence, supersession,
+  expiry, and a pgvector embedding. Working memory stays ephemeral in the
+  context engine (scratchpad/tool history).
+- Curation is deterministic and bounded: project memory, latest verification
+  per command, recent executions, and user preference messages become
+  candidates; no model call is involved.
+- Conflicts follow a documented policy: identical content is a no-op, an
+  active user correction outranks curated memory, and otherwise the newer
+  entry supersedes the older one with a `supersededById` link.
+- Episodic entries expire (`MEMORY_EPISODIC_RETENTION_DAYS`, default 90 days);
+  pruning soft-deletes and clears vectors. Subject deletion removes every
+  version and clears embeddings.
+- `memoryCurationWorkflow` runs as a separate Temporal workflow after build
+  finalize and after discovery. Its failure cannot fail a build.
+- The Context Engine retrieves layered memory (vector matches first, then
+  recent/confident entries) and falls back to the legacy `ProjectMemory`
+  summary before curation has produced rows.
+
 ## Not yet verified
 
 
@@ -192,8 +214,7 @@ These are the next verification gates; do not claim them until they run.
 - Verification workflow/sandbox (the `VerificationReport` model exists; the
   runner does not).
 - Bounded repair workflow.
-- Layered memory and curation (D4). D3 retrieves the single `ProjectMemory`
-  row when asked and keeps provenance for it.
 - Model routing by role and cost accounting.
+- Model-assisted memory extraction (D4 curation is deterministic).
 - Desktop shell packaging.
 - REA/Alan feature-gap matrix (evidence not collected yet).

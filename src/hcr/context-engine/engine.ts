@@ -3,7 +3,7 @@ import { extractConversationFacts } from "./facts";
 import { retrieveArtifacts } from "./retrievers/artifacts";
 import { retrieveFailures } from "./retrievers/failures";
 import { retrieveFiles } from "./retrievers/files";
-import { retrieveProjectMemory } from "./retrievers/memory";
+import { retrieveMemoryEntries } from "./retrievers/memory";
 import { retrieveMessageHistory, DEFAULT_HISTORY_LIMIT } from "./retrievers/message-history";
 import { retrieveRelevantFiles } from "./retrievers/relevant-files";
 import { retrieveVerificationReports } from "./retrievers/verification";
@@ -31,13 +31,14 @@ function resolveLimit(requested: number | undefined): number {
 
 async function retrieveOptionalSources(
   request: ContextRequest,
+  promptEmbedding: number[],
 ): Promise<{
   verification: Awaited<ReturnType<typeof retrieveVerificationReports>>;
   failures: Awaited<ReturnType<typeof retrieveFailures>>;
-  memory: Awaited<ReturnType<typeof retrieveProjectMemory>>;
+  memories: Awaited<ReturnType<typeof retrieveMemoryEntries>>;
 }> {
   const policy = request.policy;
-  const [verification, failures, memory] = await Promise.all([
+  const [verification, failures, memories] = await Promise.all([
     policy.includeVerification
       ? retrieveVerificationReports(request.projectId)
       : Promise.resolve([]),
@@ -45,10 +46,10 @@ async function retrieveOptionalSources(
       ? retrieveFailures(request.projectId)
       : Promise.resolve([]),
     policy.includeMemory
-      ? retrieveProjectMemory(request.projectId)
-      : Promise.resolve(null),
+      ? retrieveMemoryEntries(request.projectId, promptEmbedding)
+      : Promise.resolve([]),
   ]);
-  return { verification, failures, memory };
+  return { verification, failures, memories };
 }
 
 /**
@@ -86,7 +87,7 @@ export async function buildContext(
             policy.maxHistoryMessages ?? DEFAULT_HISTORY_LIMIT,
           )
         : Promise.resolve([]),
-      retrieveOptionalSources(request),
+      retrieveOptionalSources(request, callerInputs.promptEmbedding),
     ]);
 
   const facts = extractConversationFacts(messages);
@@ -105,7 +106,7 @@ export async function buildContext(
     relevantFiles,
     verification: optional.verification,
     failures: optional.failures,
-    memory: optional.memory,
+    memories: optional.memories,
     messages,
     toolHistory: callerInputs.toolHistory,
     scratchpad: callerInputs.currentContext.scratchpad,
@@ -124,6 +125,7 @@ export async function buildContext(
     toolHistory: selection.toolHistory,
     currentContext: callerInputs.currentContext,
     promptEmbedding: callerInputs.promptEmbedding,
+    memories: selection.memories,
     facts,
     notes: selection.notes,
   });
@@ -132,6 +134,7 @@ export async function buildContext(
     messages: messagesOut,
     sources: selection.sources,
     facts,
+    memories: selection.memories,
     budget: selection.budget,
     fingerprint: fingerprintContext({
       task,
