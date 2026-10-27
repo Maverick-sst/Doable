@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "./app-shell";
+import { GitHubPanel } from "./github-panel";
 import {
   Badge,
   Button,
@@ -131,13 +132,14 @@ type Verification = {
   createdAt: string;
 };
 
-type Tab = "discovery" | "build" | "artifacts" | "files";
+type Tab = "discovery" | "build" | "artifacts" | "files" | "github";
 
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "discovery", label: "Discovery" },
   { id: "build", label: "Build" },
   { id: "artifacts", label: "Artifacts" },
   { id: "files", label: "Files" },
+  { id: "github", label: "GitHub" },
 ];
 
 function pretty(value: unknown): string {
@@ -874,6 +876,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             </CardBody>
           </Card>
         </div>
+      ) : null}
+
+      {tab === "github" ? (
+        <GitHubPanel projectId={projectId} />
       ) : null}
 
       {tab === "files" ? (

@@ -12,8 +12,13 @@ import { runAgentTurn } from "@/src/hcr/agent-turn";
 import type { AgentTurnEvent } from "@/src/hcr/agent-turn";
 import type { CallerContextInputs, ContextResult } from "@/src/hcr/context-engine";
 import { createArtifact } from "@/src/runtime/artifacts/create-artifact";
-import { executeTool } from "@/lib/tool-executor";
+import { executeToolWithAudit } from "@/lib/tool-executor";
 import { tools } from "@/lib/tools";
+import {
+  GITHUB_READ_TOOL_NAMES,
+  githubToolDefinitions,
+  hasGitHubReadAccess,
+} from "@/src/runtime/github/tools";
 import { getEmbeddingsWithCache } from "@/lib/embeddings";
 import {
   callRoutedChat,
@@ -24,7 +29,7 @@ import {
   resolveLocalOnly,
   routeModel,
 } from "@/src/providers";
-import type { RouteRequirements } from "@/src/providers";
+import type { RouteRequirements, ToolDefinition } from "@/src/providers";
 import { assertModelTokenBudget } from "@/src/runtime/model-budget";
 import { handleToolCompletion } from "@/lib/toolCompletion";
 import { validateArtifact } from "./types/artifact-validators";
@@ -414,11 +419,35 @@ export async function executeNode(
     initialRoute.maxPromptTokens,
   );
 
+  let effectiveConfig = agentConfig;
+  let availableTools: readonly ToolDefinition[] = tools;
+  if (nodeConfig.outputMode === "tool_calls") {
+    let githubEnabled = false;
+    try {
+      githubEnabled = await hasGitHubReadAccess(projectId, input.userId);
+    } catch {
+      githubEnabled = false;
+    }
+    if (githubEnabled) {
+      effectiveConfig = {
+        ...agentConfig,
+        toolPolicy: {
+          ...agentConfig.toolPolicy,
+          eligibleTools: [
+            ...agentConfig.toolPolicy.eligibleTools,
+            ...GITHUB_READ_TOOL_NAMES,
+          ],
+        },
+      };
+      availableTools = [...tools, ...githubToolDefinitions];
+    }
+  }
+
   // `execution.running` is emitted only on the CREATED -> RUNNING
   // transition, so an activity retry cannot duplicate it.
   const executionStarted = await markExecutionRunning(executionId);
   await markNodeRunning(executionId, nodeId, input.attempt);
-  const agentConfigHash = await recordAgentConfig(nodeId, agentConfig);
+  const agentConfigHash = await recordAgentConfig(nodeId, effectiveConfig);
 
   const runningEvents: Prisma.RuntimeEventCreateManyInput[] = [];
   if (executionStarted > 0) {
@@ -474,7 +503,7 @@ export async function executeNode(
     });
 
     const outcome = await runAgentTurn({
-      config: agentConfig,
+      config: effectiveConfig,
       mode: "structured_json",
       messages: contextMessages.messages,
       model: modelAdapter,
@@ -527,10 +556,10 @@ export async function executeNode(
     });
 
     const outcome = await runAgentTurn({
-      config: agentConfig,
+      config: effectiveConfig,
       mode: "tool_calls",
       messages: [],
-      tools,
+      tools: availableTools,
       maxIterations,
       wallClockMs: budget.wallClockMs,
       model: createModelAdapter({
@@ -556,7 +585,7 @@ export async function executeNode(
       toolRunner: {
         execute: async ({ name, arguments: args, iteration }) => {
           if (name === "mark_complete") {
-            await executeTool(
+            const result = await executeToolWithAudit(
               "mark_complete",
               args,
               projectId,
@@ -567,13 +596,13 @@ export async function executeNode(
             );
             await handleToolCompletion(executionId, nodeId, {
               tool: "mark_complete",
-              result: "completed",
+              audit: { ...result.audit, completesTurn: true },
               iteration,
             });
             return { content: "completed", completesTurn: true };
           }
 
-          const toolResult = await executeTool(
+          const toolResult = await executeToolWithAudit(
             name,
             args,
             projectId,
@@ -582,16 +611,12 @@ export async function executeNode(
             nodeId,
             iteration,
           );
-          const shortLog =
-            toolResult.length > 100
-              ? `${toolResult.substring(0, 100)}...`
-              : toolResult;
           await handleToolCompletion(executionId, nodeId, {
             tool: name,
-            result: shortLog,
+            audit: toolResult.audit,
             iteration,
           });
-          return { content: toolResult };
+          return { content: toolResult.content };
         },
       },
       onEvent: (event) =>

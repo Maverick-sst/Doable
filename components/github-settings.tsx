@@ -1,0 +1,181 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Field,
+  Input,
+  Spinner,
+} from "@/components/ui";
+
+type ConnectionState = {
+  configured: boolean;
+  encryptionConfigured: boolean;
+  envTokenConfigured: boolean;
+  connection: {
+    login: string;
+    tokenLast4: string;
+    scopes: string | null;
+    lastCheckedAt: string | null;
+    updatedAt: string;
+  } | null;
+};
+
+export function GitHubSettings() {
+  const [state, setState] = useState<ConnectionState | null>(null);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function load() {
+    const response = await fetch("/api/github/connection", {
+      cache: "no-store",
+    });
+    const data = (await response.json()) as ConnectionState & {
+      error?: string;
+    };
+    if (!response.ok) throw new Error(data.error ?? "Could not load GitHub");
+    setState(data);
+  }
+
+  useEffect(() => {
+    void load().catch((cause: unknown) =>
+      setError(cause instanceof Error ? cause.message : "Load failed"),
+    );
+  }, []);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/github/connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Could not save token");
+      setToken("");
+      setNotice("GitHub token saved.");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/github/connection", {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Could not remove GitHub token");
+      setNotice("GitHub token removed.");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Remove failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="GitHub"
+        description="Read-only repository context for agents, plus explicit workspace pushes."
+        action={
+          state ? (
+            <Badge tone={state.configured ? "success" : "warning"}>
+              {state.configured ? "configured" : "not configured"}
+            </Badge>
+          ) : null
+        }
+      />
+      <CardBody className="space-y-3 text-sm">
+        {!state ? (
+          <Spinner label="Loading GitHub settings" />
+        ) : (
+          <>
+            {state.connection ? (
+              <div className="rounded-lg border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">{state.connection.login}</span>
+                  <code>••••{state.connection.tokenLast4}</code>
+                </div>
+                <p className="mt-1 text-zinc-500 dark:text-zinc-400">
+                  Stored encrypted. Scopes:{" "}
+                  {state.connection.scopes ?? "not reported"}
+                </p>
+              </div>
+            ) : null}
+
+            {!state.encryptionConfigured ? (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                Set <code>APP_ENCRYPTION_KEY</code> to store a token in the
+                database. A server-side <code>GITHUB_TOKEN</code> still works.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <Field
+                  label="Personal access token"
+                  hint="Classic: repo. Fine-grained: Contents and Pull requests read/write, Metadata read. The token is encrypted and never shown again."
+                >
+                  <Input
+                    type="password"
+                    value={token}
+                    onChange={(event) => setToken(event.target.value)}
+                    placeholder="github_pat_..."
+                    autoComplete="off"
+                  />
+                </Field>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => void save()}
+                    disabled={busy || token.trim().length < 20}
+                  >
+                    {busy ? "Saving..." : "Save token"}
+                  </Button>
+                  {state.connection ? (
+                    <Button
+                      variant="danger"
+                      onClick={() => void disconnect()}
+                      disabled={busy}
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            )}
+
+            {state.envTokenConfigured ? (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                A server-side <code>GITHUB_TOKEN</code> is also configured and
+                is used when no stored connection exists.
+              </p>
+            ) : null}
+            {notice ? (
+              <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                {notice}
+              </p>
+            ) : null}
+            {error ? (
+              <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>
+            ) : null}
+          </>
+        )}
+      </CardBody>
+    </Card>
+  );
+}

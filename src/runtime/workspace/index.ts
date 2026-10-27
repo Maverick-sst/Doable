@@ -25,8 +25,6 @@ const EXCLUDED_SEGMENTS = new Set([
   "coverage",
 ]);
 
-const EXCLUDED_FILES = new Set([".env", ".env.local", ".env.production"]);
-
 export function getWorkspaceRoot(): string {
   const configured = process.env.DOABLE_HOME;
   const root = configured
@@ -147,7 +145,11 @@ async function walk(root: string, current = root): Promise<string[]> {
   const entries = await readdir(current, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
-    if (EXCLUDED_SEGMENTS.has(entry.name) || EXCLUDED_FILES.has(entry.name)) {
+    if (
+      EXCLUDED_SEGMENTS.has(entry.name) ||
+      entry.name === ".env" ||
+      entry.name.startsWith(".env.")
+    ) {
       continue;
     }
     const absolute = path.join(current, entry.name);
@@ -167,6 +169,39 @@ export async function listWorkspaceFiles(projectId: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+export interface WorkspaceSnapshotFile {
+  path: string;
+  content: Buffer;
+  checksum: string;
+  size: number;
+}
+
+/**
+ * Binary-safe snapshot of the canonical workspace. Symlinks are skipped by
+ * `walk`, and every resolved path is checked against the project root.
+ */
+export async function readWorkspaceSnapshot(
+  projectId: string,
+): Promise<WorkspaceSnapshotFile[]> {
+  const root = getProjectRoot(projectId);
+  const relativePaths = await walk(root);
+  const files: WorkspaceSnapshotFile[] = [];
+  for (const relativePath of relativePaths) {
+    const normalized = normalizeWorkspacePath(relativePath);
+    const absolute = resolveInside(root, normalized);
+    const content = await readFile(absolute);
+    files.push({
+      path: normalized,
+      content,
+      checksum: checksum(content),
+      size: content.byteLength,
+    });
+  }
+  return files.sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
 }
 
 /**
