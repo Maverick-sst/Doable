@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getAuthMode } from "@/src/auth";
+import { getAuthMode, getCurrentUser } from "@/src/auth";
 import {
   getProviderCapabilitiesOrNull,
   getProviderId,
@@ -15,6 +15,7 @@ import {
 } from "@/src/temporal/client";
 import { getWorkspaceRoot } from "@/src/runtime/workspace";
 import { cacheSnapshot } from "@/src/runtime/cache";
+import { githubIntegrationHealth } from "@/src/runtime/github/health";
 
 async function checkDatabase(): Promise<{ ok: boolean; error?: string }> {
   try {
@@ -45,10 +46,25 @@ async function checkTemporal(): Promise<{ ok: boolean; error?: string }> {
   }
 }
 
+async function checkGitHub() {
+  try {
+    const user = await getCurrentUser();
+    return await githubIntegrationHealth(user?.id ?? null);
+  } catch {
+    return {
+      configured: false,
+      connected: false,
+      mcpReachable: false,
+      lastCheckedAt: null,
+    };
+  }
+}
+
 export async function GET() {
-  const [database, temporal] = await Promise.all([
+  const [database, temporal, github] = await Promise.all([
     checkDatabase(),
     checkTemporal(),
+    checkGitHub(),
   ]);
 
   const routing = routingSnapshot();
@@ -75,6 +91,9 @@ export async function GET() {
     routing,
     providerHealth: providerHealthSnapshot(),
     cache: cacheSnapshot(),
+    integrations: {
+      github,
+    },
     timestamp: new Date().toISOString(),
   };
 

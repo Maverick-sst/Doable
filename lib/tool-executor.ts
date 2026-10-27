@@ -11,6 +11,10 @@ import {
   readProjectFile,
   updateProjectFile,
 } from "@/src/runtime/files";
+import {
+  executeGitHubReadTool,
+  isGitHubReadTool,
+} from "@/src/runtime/github/tools";
 
 const CreateFileArgs = z.object({
   path: PathSchema,
@@ -84,6 +88,27 @@ export function createToolCallKey(input: {
     .digest("hex");
 }
 
+export type ToolAudit = Record<string, string | number | boolean>;
+
+export type ToolExecutionResult = {
+  content: string;
+  audit: ToolAudit;
+};
+
+function builtinResult(
+  toolName: string,
+  content: string,
+): ToolExecutionResult {
+  return {
+    content,
+    audit: {
+      tool: toolName,
+      status: content.startsWith("Error:") ? "error" : "ok",
+      bytes: Buffer.byteLength(content, "utf8"),
+    },
+  };
+}
+
 export async function executeTool(
   toolName: string,
   args: ToolArgs,
@@ -93,6 +118,27 @@ export async function executeTool(
   nodeId: string,
   turn = 0,
 ): Promise<string> {
+  const result = await executeToolWithAudit(
+    toolName,
+    args,
+    projectId,
+    userId,
+    executionId,
+    nodeId,
+    turn,
+  );
+  return result.content;
+}
+
+export async function executeToolWithAudit(
+  toolName: string,
+  args: ToolArgs,
+  projectId: string,
+  userId: string,
+  executionId: string,
+  nodeId: string,
+  turn = 0,
+): Promise<ToolExecutionResult> {
   await validateProjectAccess(projectId, userId);
 
   const idempotencyKey = createToolCallKey({
@@ -107,8 +153,14 @@ export async function executeTool(
     where: { idempotencyKey },
   });
 
-  if (previous?.status === "SUCCEEDED") {
-    return previous.result ?? "";
+  const githubTool = isGitHubReadTool(toolName);
+  const replayedSuccess = previous?.status === "SUCCEEDED" && githubTool;
+
+  if (previous?.status === "SUCCEEDED" && !githubTool) {
+    return {
+      content: previous.result ?? "",
+      audit: { tool: toolName, status: "ok", replayed: true },
+    };
   }
 
   if (!previous) {
@@ -148,28 +200,44 @@ export async function executeTool(
       idempotencyKey,
     });
 
-    await prisma.toolCall.updateMany({
-      where: { idempotencyKey },
-      data: {
-        status: result.startsWith("Error:") ? "FAILED" : "SUCCEEDED",
-        result: result.slice(0, MAX_STORED_RESULT_CHARS),
-        errorCode: result.startsWith("Error:") ? "tool_error" : null,
-        finishedAt: new Date(),
-      },
-    });
+    const failed = result.audit.status === "error";
+    const auditJson = JSON.stringify(result.audit);
+    if (!replayedSuccess) {
+      await prisma.toolCall.updateMany({
+        where: { idempotencyKey },
+        data: {
+          status: failed ? "FAILED" : "SUCCEEDED",
+          result: (githubTool ? auditJson : result.content).slice(
+            0,
+            MAX_STORED_RESULT_CHARS,
+          ),
+          errorCode: failed
+            ? typeof result.audit.errorCode === "string"
+              ? result.audit.errorCode
+              : "tool_error"
+            : null,
+          finishedAt: new Date(),
+        },
+      });
+    }
 
     return result;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    await prisma.toolCall.updateMany({
-      where: { idempotencyKey },
-      data: {
-        status: "FAILED",
-        errorCode: "exception",
-        finishedAt: new Date(),
-      },
-    });
-    return `Error: Tool execution failed: ${message}`;
+    if (!replayedSuccess) {
+      await prisma.toolCall.updateMany({
+        where: { idempotencyKey },
+        data: {
+          status: "FAILED",
+          errorCode: "exception",
+          finishedAt: new Date(),
+        },
+      });
+    }
+    return builtinResult(
+      toolName,
+      `Error: Tool execution failed: ${message}`,
+    );
   }
 }
 
@@ -181,38 +249,57 @@ async function dispatchTool(input: {
   executionId: string;
   nodeId: string;
   idempotencyKey: string;
-}): Promise<string> {
-  const { toolName, args, projectId, executionId, nodeId, idempotencyKey } =
+}): Promise<ToolExecutionResult> {
+  const { toolName, args, projectId, userId, executionId, nodeId, idempotencyKey } =
     input;
+
+  if (isGitHubReadTool(toolName)) {
+    const result = await executeGitHubReadTool({
+      toolName,
+      args,
+      projectId,
+      userId,
+    });
+    return {
+      content: result.content,
+      audit: result.audit as ToolAudit,
+    };
+  }
 
   switch (toolName) {
     case "create_file": {
       const parsed = parseArgs(CreateFileArgs, args);
-      if (typeof parsed === "string") return parsed;
-      return await createFile(parsed.path, parsed.content, projectId, idempotencyKey);
+      if (typeof parsed === "string") return builtinResult(toolName, parsed);
+      return builtinResult(
+        toolName,
+        await createFile(parsed.path, parsed.content, projectId, idempotencyKey),
+      );
     }
     case "edit_file": {
       const parsed = parseArgs(EditFileArgs, args);
-      if (typeof parsed === "string") return parsed;
-      return await editFile(parsed, projectId);
+      if (typeof parsed === "string") return builtinResult(toolName, parsed);
+      return builtinResult(toolName, await editFile(parsed, projectId));
     }
     case "read_file": {
       const parsed = parseArgs(PathArgs, args);
-      if (typeof parsed === "string") return parsed;
-      return await readFile(parsed.path, projectId);
+      if (typeof parsed === "string") return builtinResult(toolName, parsed);
+      return builtinResult(toolName, await readFile(parsed.path, projectId));
     }
     case "delete_file": {
       const parsed = parseArgs(PathArgs, args);
-      if (typeof parsed === "string") return parsed;
-      return await deleteFile(parsed.path, projectId);
+      if (typeof parsed === "string") return builtinResult(toolName, parsed);
+      return builtinResult(toolName, await deleteFile(parsed.path, projectId));
     }
     case "mark_complete": {
       const parsed = parseArgs(MarkCompleteArgs, args);
-      if (typeof parsed === "string") return parsed;
-      return await markComplete(parsed.summary, projectId, executionId, nodeId);
+      if (typeof parsed === "string") return builtinResult(toolName, parsed);
+      return builtinResult(
+        toolName,
+        await markComplete(parsed.summary, projectId, executionId, nodeId),
+      );
     }
     default:
-      return `Error: Invalid tool name: ${toolName}`;
+      return builtinResult(toolName, `Error: Invalid tool name: ${toolName}`);
   }
 }
 

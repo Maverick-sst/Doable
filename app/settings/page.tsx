@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { GitHubSettings } from "@/components/github-settings";
 import {
   Badge,
   Card,
@@ -137,6 +138,8 @@ export default function SettingsPage() {
             )}
           </CardBody>
         </Card>
+
+        <GitHubSettings />
 
         <Card>
           <CardHeader

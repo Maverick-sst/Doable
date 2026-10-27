@@ -103,6 +103,14 @@ enum VerificationStatus {
   BLOCKED
 }
 
+enum GitHubPushStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 enum NodeStatus {
   CREATED
   RUNNING
@@ -132,12 +140,14 @@ model Message {
 }
 
 model User {
-  id        String    @id @default(cuid())
-  clerkId   String    @unique
-  email     String    @unique
-  createdAt DateTime  @default(now())
-  projects  Project[]
-  memoryEntries MemoryEntry[]
+  id             String             @id @default(cuid())
+  clerkId        String             @unique
+  email          String             @unique
+  createdAt      DateTime           @default(now())
+  projects       Project[]
+  memoryEntries  MemoryEntry[]
+  githubConnection GitHubConnection?
+  githubPushes   GitHubPush[]
 }
 
 model Project {
@@ -160,6 +170,8 @@ model Project {
   verifications VerificationReport[]
   memoryEntries MemoryEntry[]
   derivedCache  DerivedCache[]
+  githubLink    ProjectGitHubLink?
+  githubPushes  GitHubPush[]
 
   @@index([userId, status])
 }
@@ -346,6 +358,66 @@ model ToolCall {
   createdAt       DateTime        @default(now())
 
   @@index([executionId, nodeId])
+}
+
+model GitHubConnection {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  login          String
+  tokenCiphertext String  @db.Text
+  tokenIv        String
+  tokenTag       String
+  tokenLast4     String
+  scopes         String?
+  lastCheckedAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  projectLinks   ProjectGitHubLink[]
+  pushes         GitHubPush[]
+}
+
+model ProjectGitHubLink {
+  id            String   @id @default(cuid())
+  projectId     String   @unique
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  connectionId  String?
+  connection    GitHubConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  owner         String
+  repo          String
+  defaultBranch String
+  htmlUrl       String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([connectionId])
+}
+
+model GitHubPush {
+  id             String           @id @default(cuid())
+  projectId      String
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  connectionId   String?
+  connection     GitHubConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status         GitHubPushStatus @default(PENDING)
+  branch         String
+  baseBranch     String
+  baseSha        String
+  manifestHash   String
+  stats          Json
+  commitSha      String?
+  pullRequestUrl String?
+  pullRequestNumber Int?
+  errorCode      String?
+  createdAt      DateTime         @default(now())
+  confirmedAt    DateTime?
+  completedAt    DateTime?
+
+  @@index([projectId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model VerificationReport {
