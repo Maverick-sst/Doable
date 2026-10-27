@@ -27,3 +27,14 @@ export const NODE_SCHEDULE_TO_CLOSE_TIMEOUT = "2 hours" as const;
 export const NODE_ACTIVITY_ATTEMPTS = 3 as const;
 /** Memory curation: DB passes plus bounded embedding calls. */
 export const MEMORY_ACTIVITY_TIMEOUT = "10 minutes" as const;
+
+/** Sandbox verification: install, build, test, preview, browser probe. */
+export const VERIFICATION_ACTIVITY_TIMEOUT = "30 minutes" as const;
+
+/** One repair pass: a bounded tool node plus re-verification scheduling. */
+export const REPAIR_ACTIVITY_TIMEOUT = "60 minutes" as const;
+
+/** Total verification plus at most one repair and re-verification. */
+export const VERIFICATION_WORKFLOW_TIMEOUT = "3 hours" as const;
+
+export const REPAIR_MAX_ATTEMPTS = 2 as const;

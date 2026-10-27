@@ -5,13 +5,17 @@ import type {
   TemporalHcrResult,
 } from "../contracts/hcr";
 import type { DoableIdentity } from "../contracts/types";
+import type { VerificationWorkflowInput } from "../contracts/verification";
+import { verificationWorkflow } from "./verificationWorkflow";
 import {
   DATABASE_ACTIVITY_TIMEOUT,
   HEARTBEAT_TIMEOUT,
   NODE_ACTIVITY_ATTEMPTS,
   NODE_SCHEDULE_TO_CLOSE_TIMEOUT,
+  REPAIR_MAX_ATTEMPTS,
   STRUCTURED_NODE_ACTIVITY_TIMEOUT,
   TOOL_NODE_ACTIVITY_TIMEOUT,
+  VERIFICATION_WORKFLOW_TIMEOUT,
 } from "../workflow-timeouts";
 
 // Validation is a short read-only DB check; node execution performs
@@ -68,6 +72,15 @@ const { markHcrFailed } = wf.proxyActivities<
 >({
   startToCloseTimeout: DATABASE_ACTIVITY_TIMEOUT,
   retry: { maximumAttempts: 1 },
+});
+
+// Verification/report creation is a short DB write; the sandbox work runs in
+// an abandoned child workflow so a slow build never holds the HCR run open.
+const { createBuildVerificationReport } = wf.proxyActivities<
+  typeof import("../activities/verificationActivities")
+>({
+  startToCloseTimeout: DATABASE_ACTIVITY_TIMEOUT,
+  retry: { maximumAttempts: 3 },
 });
 
 // Tool-call node names without a runtime import: workflow bundles must stay
@@ -243,6 +256,37 @@ export async function hcrWorkflow(
             partial: anyIncomplete,
           });
           finalStatus = anyIncomplete ? "PARTIAL" : "COMPLETED";
+
+          if (!anyIncomplete) {
+            const report = await createBuildVerificationReport({
+              projectId: baseIdentity.projectId,
+              executionId: baseIdentity.executionId,
+              nodeId: lastNodeId,
+            });
+            if (report.reportId) {
+              const verificationInput: VerificationWorkflowInput = {
+                projectId: baseIdentity.projectId,
+                userId: baseIdentity.userId,
+                reportId: report.reportId,
+                executionId: baseIdentity.executionId,
+                nodeId: lastNodeId,
+                initialAttempt: 1,
+                maxAttempts: REPAIR_MAX_ATTEMPTS,
+                keepPreview: true,
+              };
+              try {
+                await wf.startChild(verificationWorkflow, {
+                  workflowId: `verification-${report.reportId}`,
+                  workflowExecutionTimeout: VERIFICATION_WORKFLOW_TIMEOUT,
+                  parentClosePolicy: wf.ParentClosePolicy.ABANDON,
+                  args: [verificationInput],
+                });
+              } catch {
+                // Verification is additive: a child-start failure must not
+                // turn a completed build into a failed one.
+              }
+            }
+          }
         }
         pending = [];
       }

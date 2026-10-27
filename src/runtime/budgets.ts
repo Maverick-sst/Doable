@@ -131,3 +131,11 @@ export function resolveNodeBudget(
     ),
   };
 }
+
+/**
+ * Bounded repair attempts for one verification workflow. Read at the start
+ * boundary and passed into the workflow input so replay stays deterministic.
+ */
+export function resolveRepairMaxAttempts(): number {
+  return Math.min(3, Math.max(1, intFromEnv("REPAIR_MAX_ATTEMPTS", 2)));
+}

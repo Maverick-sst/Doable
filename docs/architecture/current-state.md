@@ -173,8 +173,9 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
 - Node execution emits `context.assembled` with the fingerprint, budget
   report, and source references, so the same durable state is reproducible
   across worker restarts.
-- The six HCR agents keep their existing context shape (V2 flags off, large
-  default budget); parity is locked by tests.
+- The six build agents keep their existing context shape (V2 flags off, large
+  default budget), and the seventh role (`REPAIR_ENG`) uses tree + vector
+  context; parity is locked by tests.
 
 ## Layered memory and curation (D4, 2026-10-27)
 
@@ -263,6 +264,54 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
   `tests/cache.test.ts` covers scoping, TTL, invalidation, validation,
   failure fallback, and concurrent loads.
 
+## Sandbox verification and bounded repair (D8/D9, 2026-10-27)
+
+- `src/runtime/sandbox` is the only sandbox seam. `SandboxAdapter.available()`
+  reports a missing `kubectl`, unreachable cluster, or `SANDBOX_ENABLED=false`;
+  the Kubernetes adapter otherwise creates one namespace and pod per report id.
+- The pod is non-root (UID/GID 1000), has a read-only root filesystem, drops
+  all capabilities, disables privilege escalation, uses `RuntimeDefault`
+  seccomp, and mounts only `emptyDir` volumes. It has no service-account
+  token, host path, or Docker socket. Calico default-deny ingress plus egress
+  allow only DNS and internet TCP 80/443; private address ranges are blocked.
+  Public-internet exfiltration inside the pod is still possible.
+- Commands are derived from `package.json` and lockfiles, never from a model:
+  package-manager detection, install, optional build, optional test, and an
+  optional preview (`preview`/`start` or a static `dist|build|out` directory).
+  A missing install script or `package.json` yields an honest BLOCKED report.
+- `src/runtime/verification/runner.ts` stages the canonical snapshot into a
+  temp directory, copies it into the pod, runs each step with a timeout and
+  bounded output, then probes port 4173 through a `kubectl port-forward`.
+  `snapshotHash` ties the report to the exact workspace revision.
+- Browser evidence is optional but honest: `playwright-core` drives host
+  Chrome/Chromium (or `DOABLE_BROWSER_PATH`), blocks every origin except the
+  preview, and records status, title, console/page errors, failed/blocked
+  requests, a bounded DOM snapshot, and a screenshot. Without Chrome the
+  report says visual evidence is unavailable; it never invents a capture.
+- Screenshots live under `DOABLE_HOME/evidence/<project>/<report>/` and are
+  served by an auth-scoped route. The database stores the relative reference,
+  not image bytes.
+- The preview survives a successful run for 30 minutes so the UI can embed it;
+  otherwise the namespace is deleted in `finally`.
+- A PASSED report requires every required step to pass and at least one real
+  step to run. Infrastructure failures become BLOCKED, not FAILED, and are
+  never repaired.
+- `startVerification` is the only manual start seam: it creates a RUNNING
+  report, hands the workflow to Temporal, and converts a missing worker into
+  a BLOCKED report with an actionable message.
+- `verificationWorkflow` verifies, optionally runs one repair activity, then
+  re-verifies. `REPAIR_MAX_ATTEMPTS` is clamped to 1..3 (default 2); only a
+  fresh PASSED report counts as verified. A build finalize starts the same
+  workflow as an abandoned child so slow verification cannot hold the HCR run
+  open.
+- Repair is its own `REPAIR` workflow/execution/node. It receives failed-step
+  tails, browser evidence, the DOM tail, and a file list, and may only edit
+  source. Changed files come from a workspace snapshot diff, not model claims.
+  If no file changed, the loop stops rather than re-running identical work.
+- `components/project-workspace.tsx` shows step status, attempt history,
+  preview, screenshot, browser-unavailable, and repair-changed states while
+  polling a RUNNING report every three seconds.
+
 ## Not yet verified
 
 
@@ -272,7 +321,9 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
 - Worker-restart-during-activity drill.
 - Durable cache behavior against a real Postgres and under multi-process
   workers; unit tests and the drill use the in-memory adapter.
-- Verification sandbox (build/test execution). Structural checks only today.
+- The sandbox image build and a live verify → repair → re-verify run. The
+  code, migration, worker registration, and unit/build checks pass, but no
+  live cluster report is claimed yet.
 - Desktop packaging and REA/Alan feature-gap evidence.
 
 These are the next verification gates; do not claim them until they run.
@@ -280,9 +331,10 @@ These are the next verification gates; do not claim them until they run.
 ## Known remaining work
 
 - Integration and Temporal test suites.
-- Verification workflow/sandbox (the `VerificationReport` model exists; the
-  runner does not).
-- Bounded repair workflow.
+- Live sandbox end-to-end drill (image build, Calico egress proof, preview,
+  screenshot, bounded repair) on the Vite fixture.
+- Vision-driven repair: screenshot bytes are captured, but model messages are
+  text-only, so repair currently reasons from console/DOM/text evidence.
 - Model-assisted memory extraction (D4 curation is deterministic).
 - Scheduled cache pruning and cache-refresh maintenance (D10).
 - Desktop shell packaging.

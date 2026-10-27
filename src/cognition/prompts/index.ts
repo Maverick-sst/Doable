@@ -4,3 +4,4 @@ export { PRD_REVIEWER_SYSTEM_PROMPT } from "./prd-reviewer-prompt";
 export { STAFF_ENGINEER_SYSTEM_PROMPT } from "./staff-engineer-prompt";
 export { FRONTEND_ENGINEER_SYSTEM_PROMPT } from "./frontend-engineer-prompt";
 export { BACKEND_ENGINEER_SYSTEM_PROMPT } from "./backend-engineer-prompt";
+export { REPAIR_ENGINEER_SYSTEM_PROMPT } from "./repair-prompt";

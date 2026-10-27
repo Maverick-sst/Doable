@@ -20,6 +20,9 @@ request content off the machine.
 - Versioned artifacts, runtime events, node timeline, failure recovery, retry,
   and cancellation.
 - Filesystem-canonical workspace under `DOABLE_HOME`, with a Postgres mirror.
+- Disposable Kubernetes verification sandbox (install, build, tests, live
+  preview, screenshot/console evidence) with a bounded one-pass repair and
+  re-verification. Requires an enforcing NetworkPolicy CNI such as Calico.
 - File tree, file viewer/editor, artifact inspector, ZIP export.
 - Provider seam for Ollama/OpenAI-compatible local models and OpenRouter.
 - Health/readiness endpoint at `/api/health`.
@@ -31,6 +34,8 @@ request content off the machine.
 - **Docker** only if you use the bundled local services. You can point
   `DATABASE_URL` at any Postgres 16+ database with the `vector` extension and
   run Temporal yourself.
+- **Kubernetes with a NetworkPolicy-enforcing CNI** (optional; Calico is
+  tested) plus `kubectl` and a built sandbox image for workspace verification.
 - **Ollama** (optional but recommended for a fully local model).
 
 ## Quick start
@@ -89,6 +94,34 @@ claim local-only operation while remote inference is enabled. When the chosen
 provider has no embedding endpoint, semantic file search is skipped and
 recorded as an `embeddings.skipped` runtime event; builds still run.
 
+### Sandbox verification
+
+The workspace check runs in a disposable namespace and pod: install, build,
+tests, a preview server, and a browser probe. Commands come only from
+`package.json`; project scripts cannot be supplied by a model. The pod is
+non-root, read-only at the root filesystem, has no service-account token, no
+host mounts, and a default-deny egress policy that permits internet HTTP(S)
+and cluster DNS while blocking private address ranges.
+
+```bash
+# Build the sandbox image and make it available to your cluster.
+docker build -f docker/sandbox/Dockerfile -t doable-sandbox:latest .
+minikube image load doable-sandbox:latest
+
+# Or with a Docker-backed minikube:
+eval "$(minikube docker-env)"
+docker build -f docker/sandbox/Dockerfile -t doable-sandbox:latest .
+```
+
+Set `SANDBOX_IMAGE` if you use another tag. Screenshot evidence uses a host
+Chrome/Chromium via `DOABLE_BROWSER_PATH`; without a browser the report records
+that visual evidence was unavailable rather than claiming a screenshot.
+
+Repair is bounded by `REPAIR_MAX_ATTEMPTS` (1-3, default 2): a failed
+verification with application evidence is repaired once and re-verified. A
+blocked sandbox is never repaired, and only a fresh PASSED report marks the
+workspace verified.
+
 ## Scripts
 
 | Command | Purpose |
@@ -132,6 +165,9 @@ Browser workspace (Next.js App Router)
 - `src/runtime/artifacts` — the only artifact write path; project-wide revisions.
 - `src/runtime/files` — DB metadata + workspace bytes + embeddings.
 - `src/runtime/workspace` — safe paths, atomic writes, manifest, ZIP export.
+- `src/runtime/sandbox` — sandbox contract, command planning, Kubernetes adapter.
+- `src/runtime/verification` — sandbox runner, evidence, verification start seam.
+- `src/runtime/repair` — bounded evidence-driven repair pass.
 - `src/temporal/runtime` — the only build-start/cancel/retry boundary.
 - `src/hcr/context-engine` — retrieval and pure context assembly.
 
@@ -141,6 +177,8 @@ Browser workspace (Next.js App Router)
   runtime events, verification reports, and file metadata/content mirror.
 - `DOABLE_HOME` (default `./.doable`): canonical generated files at
   `projects/<projectId>/`.
+- `DOABLE_HOME/evidence/<projectId>/<reportId>/` — verification screenshots,
+  served through an auth-scoped route and never stored as base64 in Postgres.
 - Temporal: durable orchestration history.
 
 ## Repository layout

@@ -3,9 +3,12 @@ import { requireDbUser } from "@/lib/auth-user";
 import { prisma } from "@/lib/prisma";
 import {
   latestVerification,
-  recordVerification,
-  runStructuralVerification,
+  listVerificationAttempts,
 } from "@/src/runtime/verification";
+import {
+  startVerification,
+  VerificationStartError,
+} from "@/src/runtime/verification/start";
 
 async function requireProject(projectId: string, userId: string) {
   return prisma.project.findFirst({
@@ -27,9 +30,12 @@ export async function GET(
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  return NextResponse.json({
-    verification: await latestVerification(project.id),
-  });
+  const [verification, attempts] = await Promise.all([
+    latestVerification(project.id),
+    listVerificationAttempts(project.id),
+  ]);
+
+  return NextResponse.json({ verification, attempts });
 }
 
 export async function POST(
@@ -45,11 +51,25 @@ export async function POST(
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const result = await runStructuralVerification(project.id);
-  const report = await recordVerification({
-    projectId: project.id,
-    result,
-  });
-
-  return NextResponse.json({ verification: report }, { status: 201 });
+  try {
+    const { report, temporalWorkflowId } = await startVerification({
+      projectId: project.id,
+      userId: user.id,
+    });
+    return NextResponse.json(
+      { verification: report, temporalWorkflowId },
+      { status: 202 },
+    );
+  } catch (startError) {
+    if (startError instanceof VerificationStartError) {
+      return NextResponse.json(
+        { error: startError.message },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json(
+      { error: "Could not start verification" },
+      { status: 500 },
+    );
+  }
 }

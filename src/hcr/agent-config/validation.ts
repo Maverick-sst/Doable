@@ -10,6 +10,7 @@ const agentTypeSchema = z.enum([
   "STAFF_ENGINEER",
   "FRONTEND_ENG",
   "BACKEND_ENG",
+  "REPAIR_ENG",
 ]);
 
 const capabilitySchema = z.enum([

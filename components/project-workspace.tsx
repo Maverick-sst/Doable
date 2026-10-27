@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "./app-shell";
@@ -121,6 +122,16 @@ type HcrState = {
   events: HcrEvent[];
 };
 
+type VerificationStep = {
+  name: string;
+  status: string;
+  command: string | null;
+  exitCode: number | null;
+  durationMs: number;
+  output: string;
+  required: boolean;
+};
+
 type Verification = {
   id: string;
   status: string;
@@ -129,8 +140,20 @@ type Verification = {
   durationMs: number | null;
   output: string | null;
   revision: string | null;
+  snapshotHash: string | null;
+  previewUrl: string | null;
+  steps: VerificationStep[] | null;
+  evidence: Record<string, unknown> | null;
+  parentReportId: string | null;
+  attempt: number;
   createdAt: string;
 };
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
 
 type Tab = "discovery" | "build" | "artifacts" | "files" | "github";
 
@@ -157,6 +180,9 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [files, setFiles] = useState<FileMeta[]>([]);
   const [verification, setVerification] = useState<Verification | null>(null);
+  const [verificationAttempts, setVerificationAttempts] = useState<
+    Array<{ id: string; status: string; attempt: number; createdAt: string }>
+  >([]);
   const [tab, setTab] = useState<Tab>("discovery");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -208,6 +234,12 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         const filesData = (await filesResponse.json()) as { files: FileMeta[] };
         const verificationData = (await verificationResponse.json()) as {
           verification: Verification | null;
+          attempts?: Array<{
+            id: string;
+            status: string;
+            attempt: number;
+            createdAt: string;
+          }>;
         };
 
         setProject(projectData.project);
@@ -216,6 +248,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         setArtifacts(artifactsData.artifacts ?? []);
         setFiles(filesData.files ?? []);
         setVerification(verificationData.verification ?? null);
+        setVerificationAttempts(verificationData.attempts ?? []);
         setError(null);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Could not load project");
@@ -241,6 +274,37 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     return () => clearInterval(timer);
   }, [isRunning, load]);
 
+  const verificationRunning = verification?.status === "RUNNING";
+
+  useEffect(() => {
+    if (!verificationRunning) return;
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const response = await fetch(
+            `/api/projects/${projectId}/verifications`,
+            { cache: "no-store" },
+          );
+          if (!response.ok) return;
+          const data = (await response.json()) as {
+            verification: Verification | null;
+            attempts?: Array<{
+              id: string;
+              status: string;
+              attempt: number;
+              createdAt: string;
+            }>;
+          };
+          setVerification(data.verification ?? null);
+          setVerificationAttempts(data.attempts ?? []);
+        } catch {
+          // Keep the last known state; the next poll retries.
+        }
+      })();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [projectId, verificationRunning]);
+
   const discoveryMessages = useMemo(
     () => (project?.messages ?? []).filter((message) => message.phase === "DISCOVERY"),
     [project],
@@ -253,6 +317,13 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     () => artifacts.filter((artifact) => artifact.type !== "DISCOVERY_REQUIREMENT"),
     [artifacts],
   );
+  const evidence = record(verification?.evidence);
+  const browserEvidence = record(evidence.browser);
+  const repairEvidence = record(evidence.repair);
+  const screenshotUrl =
+    typeof browserEvidence.screenshotUrl === "string"
+      ? browserEvidence.screenshotUrl
+      : null;
 
   async function sendDiscovery(event: React.FormEvent) {
     event.preventDefault();
@@ -347,6 +418,22 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         throw new Error(data.error ?? "Verification failed");
       }
       setVerification(data.verification);
+      if (data.verification.status === "RUNNING") {
+        setVerificationAttempts((previous) => {
+          if (previous.some((attempt) => attempt.id === data.verification?.id)) {
+            return previous;
+          }
+          return [
+            {
+              id: data.verification!.id,
+              status: data.verification!.status,
+              attempt: data.verification!.attempt,
+              createdAt: data.verification!.createdAt,
+            },
+            ...previous,
+          ];
+        });
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Verification failed");
     } finally {
@@ -753,7 +840,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             <Card>
               <CardHeader
                 title="Workspace check"
-                description="Structural verification only; build/test execution is staged."
+                description="Runs install, build, tests, and a live preview in a disposable Kubernetes sandbox. Failures get one bounded repair pass and a re-run."
                 action={
                   <Button variant="secondary" onClick={() => void runVerification()} disabled={busy}>
                     Run
@@ -778,10 +865,53 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                       label="Duration"
                       value={verification.durationMs === null ? "—" : `${verification.durationMs} ms`}
                     />
-                    <Row label="Revision" value={verification.revision ?? "—"} />
+                    <Row label="Attempt" value={String(verification.attempt)} />
+                    {verificationAttempts.length > 1 ? (
+                      <Row
+                        label="History"
+                        value={verificationAttempts
+                          .map((attempt) => `${attempt.attempt}:${attempt.status}`)
+                          .join(" ")}
+                      />
+                    ) : null}
+                    <Row
+                      label="Revision"
+                      value={
+                        verification.snapshotHash
+                          ? verification.snapshotHash.slice(0, 12)
+                          : verification.revision ?? "—"
+                      }
+                    />
+                    {verification.steps && verification.steps.length > 0 ? (
+                      <div className="space-y-1">
+                        {verification.steps.map((step) => (
+                          <div
+                            key={`${verification.id}-${step.name}`}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <span className="text-zinc-500 dark:text-zinc-400">
+                              {step.name}
+                            </span>
+                            <span className="flex items-center gap-2">
+                              <span className="text-zinc-400">
+                                {step.durationMs} ms
+                              </span>
+                              <Badge tone={statusTone(step.status.toUpperCase())}>
+                                {step.status}
+                              </Badge>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     <pre className="max-h-40 overflow-auto rounded bg-zinc-950 p-2 text-[10px] text-zinc-100">
                       {verification.output}
                     </pre>
+                    {verification.parentReportId ? (
+                      <p className="text-[10px] text-zinc-500">
+                        Re-verification after a repair attempt.
+                      </p>
+                    ) : null}
                   </>
                 ) : (
                   <p className="text-zinc-500 dark:text-zinc-400">
@@ -790,6 +920,61 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 )}
               </CardBody>
             </Card>
+
+            {verification && (verification.previewUrl || screenshotUrl) ? (
+              <Card>
+                <CardHeader
+                  title="Preview"
+                  description="Served from the disposable sandbox. It stays available for 30 minutes after the run."
+                  action={
+                    verification.previewUrl ? (
+                      <a
+                        href={verification.previewUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+                      >
+                        Open
+                      </a>
+                    ) : null
+                  }
+                />
+                <CardBody className="space-y-3">
+                  {verification.previewUrl ? (
+                    <iframe
+                      src={verification.previewUrl}
+                      title="Sandbox preview"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      className="h-80 w-full rounded border border-zinc-200 bg-white dark:border-zinc-800"
+                    />
+                  ) : null}
+                  {screenshotUrl ? (
+                    <Image
+                      src={screenshotUrl}
+                      alt="Screenshot captured during verification"
+                      width={1280}
+                      height={800}
+                      unoptimized
+                      className="w-full rounded border border-zinc-200 dark:border-zinc-800"
+                    />
+                  ) : null}
+                  {typeof browserEvidence.reason === "string" ? (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                      Visual evidence unavailable: {browserEvidence.reason}
+                    </p>
+                  ) : null}
+                  {repairEvidence.changed === true ? (
+                    <p className="text-[10px] text-zinc-500">
+                      Repair changed{" "}
+                      {Array.isArray(repairEvidence.filesChanged)
+                        ? repairEvidence.filesChanged.length
+                        : 0}{" "}
+                      file(s) before re-verification.
+                    </p>
+                  ) : null}
+                </CardBody>
+              </Card>
+            ) : null}
 
             <Card>
               <CardHeader title="Recent events" />
