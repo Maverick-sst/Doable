@@ -17,13 +17,13 @@ type Variant = "primary" | "secondary" | "ghost" | "danger";
 
 const variants: Record<Variant, string> = {
   primary:
-    "bg-indigo-600 text-white hover:bg-indigo-500 disabled:bg-indigo-400",
+    "bg-accent text-accent-foreground shadow-sm hover:brightness-110 active:brightness-95",
   secondary:
-    "border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800",
+    "border border-line bg-canvas text-ink hover:bg-hover active:bg-active",
   ghost:
-    "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white",
+    "text-muted hover:bg-hover hover:text-ink active:bg-active",
   danger:
-    "border border-rose-300 bg-white text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-950/40",
+    "border border-danger-line bg-danger-soft text-danger hover:brightness-[0.98]",
 };
 
 export function Button({
@@ -34,7 +34,7 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex h-9 items-center justify-center rounded-lg px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+        "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-[12.5px] font-medium transition-[background-color,color,filter,border-color] disabled:cursor-not-allowed disabled:opacity-50",
         variants[variant],
         className,
       )}
@@ -46,14 +46,17 @@ export function Button({
 export function Card({
   children,
   className,
+  id,
 }: {
   children: ReactNode;
   className?: string;
+  id?: string;
 }) {
   return (
     <div
+      id={id}
       className={cn(
-        "rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900",
+        "rounded-xl border border-line bg-canvas shadow-[var(--shadow-card)]",
         className,
       )}
     >
@@ -72,13 +75,13 @@ export function CardHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-      <div>
-        <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+    <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3.5">
+      <div className="min-w-0">
+        <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-ink">
           {title}
         </h2>
         {description ? (
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 max-w-xl text-[11.5px] leading-5 text-muted">
             {description}
           </p>
         ) : null}
@@ -95,18 +98,15 @@ export function CardBody({
   children: ReactNode;
   className?: string;
 }) {
-  return <div className={cn("p-5", className)}>{children}</div>;
+  return <div className={cn("p-4", className)}>{children}</div>;
 }
 
 const tones = {
-  neutral:
-    "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-  info: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
-  success:
-    "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
-  warning:
-    "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300",
-  danger: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+  neutral: "bg-hover text-muted",
+  info: "bg-accent-soft text-brand",
+  success: "bg-success-soft text-success",
+  warning: "bg-warning-soft text-warning",
+  danger: "bg-danger-soft text-danger",
 } as const;
 
 export type Tone = keyof typeof tones;
@@ -121,7 +121,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+        "inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium tracking-[0.02em]",
         tones[tone],
       )}
     >
@@ -147,7 +147,7 @@ export function Input({
   return (
     <input
       className={cn(
-        "h-9 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50",
+        "h-9 w-full rounded-lg border border-line bg-canvas px-3 text-[13px] text-ink outline-none transition placeholder:text-faint focus:border-brand focus:ring-2 focus:ring-accent-soft disabled:opacity-60",
         className,
       )}
       {...props}
@@ -162,7 +162,7 @@ export function Textarea({
   return (
     <textarea
       className={cn(
-        "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50",
+        "w-full rounded-lg border border-line bg-canvas px-3 py-2 text-[13px] leading-5 text-ink outline-none transition placeholder:text-faint focus:border-brand focus:ring-2 focus:ring-accent-soft disabled:opacity-60",
         className,
       )}
       {...props}
@@ -181,14 +181,10 @@ export function Field({
 }) {
   return (
     <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-        {label}
-      </span>
+      <span className="text-[11.5px] font-medium text-muted">{label}</span>
       {children}
       {hint ? (
-        <span className="block text-[11px] text-zinc-500 dark:text-zinc-500">
-          {hint}
-        </span>
+        <span className="block text-[10.5px] leading-4 text-faint">{hint}</span>
       ) : null}
     </label>
   );
@@ -196,8 +192,8 @@ export function Field({
 
 export function Spinner({ label }: { label?: string }) {
   return (
-    <span className="inline-flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-300 border-t-indigo-600 dark:border-zinc-700 dark:border-t-indigo-400" />
+    <span className="inline-flex items-center gap-2 text-[11.5px] text-muted">
+      <span className="size-3.5 animate-spin rounded-full border-2 border-line border-t-brand" />
       {label}
     </span>
   );
@@ -213,11 +209,9 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-dashed border-zinc-300 p-8 text-center dark:border-zinc-700">
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-        {title}
-      </p>
-      <p className="mx-auto mt-1 max-w-md text-xs text-zinc-500 dark:text-zinc-400">
+    <div className="rounded-xl border border-dashed border-line-strong px-6 py-10 text-center">
+      <p className="text-[13px] font-medium text-ink">{title}</p>
+      <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-5 text-muted">
         {description}
       </p>
       {action ? <div className="mt-4">{action}</div> : null}

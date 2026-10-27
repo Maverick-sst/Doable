@@ -90,16 +90,21 @@ export default function SettingsPage() {
 
   return (
     <AppShell>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+      <div className="mb-7">
+        <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-faint">
+          Configuration
+        </p>
+        <h1 className="mt-2 text-[26px] font-semibold tracking-[-0.035em] text-ink">
+          Settings
+        </h1>
+        <p className="mt-1.5 max-w-2xl text-[12.5px] leading-5 text-muted">
           Local-first configuration. Secrets are read from the environment and
           never displayed here.
         </p>
       </div>
 
       {error ? (
-        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+        <div className="mb-4 rounded-lg border border-danger-line bg-danger-soft px-3.5 py-2.5 text-[12px] text-danger">
           {error}
         </div>
       ) : null}
@@ -127,11 +132,11 @@ export default function SettingsPage() {
                   }
                 />
                 <div className="flex items-center justify-between">
-                  <span className="text-zinc-600 dark:text-zinc-300">Auth mode</span>
+                  <span className="text-muted">Auth mode</span>
                   <Badge tone="info">{health.authMode}</Badge>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-zinc-600 dark:text-zinc-300">Provider</span>
+                  <span className="text-muted">Provider</span>
                   <Badge tone="info">{health.provider}</Badge>
                 </div>
               </>
@@ -148,19 +153,19 @@ export default function SettingsPage() {
           />
           <CardBody className="space-y-3 text-xs">
             <div>
-              <p className="font-medium text-zinc-800 dark:text-zinc-200">
+              <p className="font-medium text-ink">
                 Workspace root
               </p>
-              <code className="mt-1 block break-all rounded bg-zinc-100 px-2 py-1 text-[11px] dark:bg-zinc-800">
+              <code className="mt-1 block break-all rounded bg-rail px-2 py-1 text-[11px] ">
                 {health?.workspaceRoot ?? "loading..."}
               </code>
             </div>
-            <p className="text-zinc-500 dark:text-zinc-400">
+            <p className="text-muted">
               Set <code>DOABLE_HOME</code> to move generated workspaces. The
               database stores metadata, messages, artifacts, and a content
               mirror; the workspace is the canonical editable copy.
             </p>
-            <p className="text-zinc-500 dark:text-zinc-400">
+            <p className="text-muted">
               ZIP export excludes dependencies, caches, Git internals, and
               local environment files.
             </p>
@@ -178,7 +183,7 @@ export default function SettingsPage() {
             ) : health.routing.error ? (
               <>
                 <Badge tone="danger">unroutable</Badge>
-                <p className="break-words text-rose-600 dark:text-rose-400">
+                <p className="break-words text-danger">
                   {health.routing.error}
                 </p>
                 <CandidateList candidates={health.routing.candidates} />
@@ -186,7 +191,7 @@ export default function SettingsPage() {
             ) : (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-zinc-600 dark:text-zinc-300">Route</span>
+                  <span className="text-muted">Route</span>
                   <span className="flex items-center gap-2">
                     <Badge tone="info">{health.routing.modelId}</Badge>
                     <Badge
@@ -199,7 +204,7 @@ export default function SettingsPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-zinc-600 dark:text-zinc-300">Egress</span>
+                  <span className="text-muted">Egress</span>
                   <Badge
                     tone={health.routing.localOnly ? "success" : "warning"}
                   >
@@ -211,21 +216,21 @@ export default function SettingsPage() {
                   </Badge>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-zinc-600 dark:text-zinc-300">
+                  <span className="text-muted">
                     Prompt ceiling
                   </span>
-                  <span className="text-zinc-500 dark:text-zinc-400">
+                  <span className="text-muted">
                     {health.routing.maxPromptTokens?.toLocaleString() ?? "unknown"}{" "}
                     of {health.routing.contextWindow?.toLocaleString() ?? "unknown"}{" "}
                     tokens
                   </span>
                 </div>
                 <CandidateList candidates={health.routing.candidates} />
-                <div className="flex items-center justify-between border-t border-zinc-200 pt-3 dark:border-zinc-800">
-                  <span className="text-zinc-600 dark:text-zinc-300">
+                <div className="flex items-center justify-between border-t border-line pt-3 ">
+                  <span className="text-muted">
                     Circuit breakers
                   </span>
-                  <span className="text-zinc-500 dark:text-zinc-400">
+                  <span className="text-muted">
                     {health.providerHealth.length === 0
                       ? "all closed"
                       : health.providerHealth
@@ -248,12 +253,12 @@ export default function SettingsPage() {
           />
           <CardBody className="space-y-3 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-zinc-600 dark:text-zinc-300">State</span>
+              <span className="text-muted">State</span>
               <span className="flex items-center gap-2">
                 <Badge tone={health?.cache.enabled ? "success" : "warning"}>
                   {health?.cache.enabled ? "enabled" : "disabled"}
                 </Badge>
-                <span className="text-zinc-500 dark:text-zinc-400">
+                <span className="text-muted">
                   {health?.cache.hotEntries ?? 0} hot entries
                 </span>
               </span>
@@ -262,21 +267,21 @@ export default function SettingsPage() {
               health.cache.namespaces.map((entry) => (
                 <div
                   key={entry.namespace}
-                  className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-2 dark:border-zinc-800"
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 "
                 >
                   <span className="font-medium">{entry.namespace}</span>
-                  <span className="text-zinc-500 dark:text-zinc-400">
+                  <span className="text-muted">
                     {entry.hits} hit(s) · {entry.misses} miss(es) ·{" "}
                     {entry.failures} failure(s) · {entry.writes} write(s)
                   </span>
                 </div>
               ))
             ) : (
-              <p className="text-zinc-500 dark:text-zinc-400">
+              <p className="text-muted">
                 No lookups yet in this process.
               </p>
             )}
-            <p className="text-zinc-500 dark:text-zinc-400">
+            <p className="text-muted">
               Keys are scoped by project, agent configuration, provider, and
               model version. Entries expire automatically and are invalidated
               when a project is deleted.
@@ -290,25 +295,25 @@ export default function SettingsPage() {
             description="Choose a local model or an explicitly selected remote provider."
           />
           <CardBody className="grid gap-4 text-xs sm:grid-cols-2">
-            <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+            <div className="rounded-lg border border-line p-4 ">
               <h3 className="text-sm font-semibold">Local (default)</h3>
-              <p className="mt-1 text-zinc-500 dark:text-zinc-400">
+              <p className="mt-1 text-muted">
                 Point Doable at Ollama or any OpenAI-compatible local server.
                 Nothing leaves the machine for inference.
               </p>
-              <pre className="mt-3 overflow-x-auto rounded bg-zinc-950 p-3 text-[11px] text-zinc-100">{`MODEL_PROVIDER=ollama
+              <pre className="mt-3 overflow-x-auto rounded bg-code p-3 text-[11px] text-code-foreground">{`MODEL_PROVIDER=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.2
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text`}</pre>
             </div>
-            <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+            <div className="rounded-lg border border-line p-4 ">
               <h3 className="text-sm font-semibold">Remote (OpenAI-compatible)</h3>
-              <p className="mt-1 text-zinc-500 dark:text-zinc-400">
+              <p className="mt-1 text-muted">
                 Select the model explicitly. Only the context needed for that
                 call is sent to the provider. RunAnywhere supports chat and
                 tools but not embeddings, so semantic file search is skipped.
               </p>
-              <pre className="mt-3 overflow-x-auto rounded bg-zinc-950 p-3 text-[11px] text-zinc-100">{`# RunAnywhere
+              <pre className="mt-3 overflow-x-auto rounded bg-code p-3 text-[11px] text-code-foreground">{`# RunAnywhere
 MODEL_PROVIDER=runanywhere
 RUNANYWHERE_API_KEY=...
 MODEL=glm-5.3-flash
@@ -332,8 +337,8 @@ function CandidateList({
 }) {
   if (candidates.length === 0) return null;
   return (
-    <details className="rounded border border-zinc-200 p-3 dark:border-zinc-800">
-      <summary className="cursor-pointer text-zinc-600 dark:text-zinc-300">
+    <details className="rounded border border-line p-3 ">
+      <summary className="cursor-pointer text-muted">
         Candidate evaluation ({candidates.filter((c) => c.eligible).length}{" "}
         eligible)
       </summary>
@@ -365,13 +370,13 @@ function ServiceRow({
 }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="text-zinc-600 dark:text-zinc-300">{name}</span>
+      <span className="text-muted">{name}</span>
       <div className="max-w-[320px] text-right">
         <Badge tone={statusTone(ok ? "COMPLETED" : "FAILED")}>
           {ok ? "ready" : "unavailable"}
         </Badge>
         {!ok && detail ? (
-          <p className="mt-1 break-words text-[11px] text-rose-600 dark:text-rose-400">
+          <p className="mt-1 break-words text-[11px] text-danger">
             {detail}
           </p>
         ) : null}
