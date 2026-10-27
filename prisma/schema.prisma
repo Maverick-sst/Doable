@@ -159,8 +159,27 @@ model Project {
   artifacts     Artifact[]
   verifications VerificationReport[]
   memoryEntries MemoryEntry[]
+  derivedCache  DerivedCache[]
 
   @@index([userId, status])
+}
+
+/// Fail-open derived-state cache. Keys are scoped and versioned; values are
+/// derived data only (vectors, summaries), never prompts or model output.
+model DerivedCache {
+  key           String   @id
+  namespace     String
+  projectId     String?
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scopeKey      String
+  sourceVersion String
+  value         Json
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([projectId, namespace])
+  @@index([expiresAt])
 }
 
 model File {

@@ -25,6 +25,11 @@ async function emitUsage(
       promptTokens: response.usage?.promptTokens ?? null,
       completionTokens: response.usage?.completionTokens ?? null,
       totalTokens: response.usage?.totalTokens ?? null,
+      cachedPromptTokens: response.usage?.cachedPromptTokens ?? null,
+      promptCacheSource:
+        response.usage?.cachedPromptTokens !== undefined
+          ? "provider"
+          : "unsupported",
       latencyMs,
       usageSource: response.usage ? "provider" : "unavailable",
       estimatedCostUsd: cost.totalCostUsd,

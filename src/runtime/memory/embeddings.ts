@@ -33,7 +33,7 @@ export async function embedMemoryEntries(
   for (const id of batch) {
     const entry = await prisma.memoryEntry.findFirst({
       where: { id, status: MemoryStatus.ACTIVE },
-      select: { id: true, content: true },
+      select: { id: true, content: true, projectId: true },
     });
     if (!entry) {
       result.skipped++;
@@ -54,6 +54,7 @@ export async function embedMemoryEntries(
     try {
       const embedding = await getEmbeddings(
         entry.content.slice(0, MEMORY_MAX_CONTENT_CHARS),
+        { projectId: entry.projectId },
       );
       const vector = `[${embedding.join(",")}]`;
       await prisma.$executeRaw`

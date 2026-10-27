@@ -27,6 +27,7 @@ type OpenRouterResponse = {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
   };
   error?: { message?: string };
 };
@@ -68,6 +69,9 @@ async function readJson(response: Response): Promise<OpenRouterResponse> {
 export const openRouterProvider: ModelProvider = {
   id: "openrouter",
   capabilities: { chat: true, tools: true, embeddings: true },
+  get embeddingModelId() {
+    return process.env.EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODEL;
+  },
 
   async chat(request: ChatRequest): Promise<ChatResult> {
     const model = request.model ?? process.env.MODEL ?? DEFAULT_CHAT_MODEL;
@@ -115,6 +119,8 @@ export const openRouterProvider: ModelProvider = {
             promptTokens: data.usage.prompt_tokens,
             completionTokens: data.usage.completion_tokens,
             totalTokens: data.usage.total_tokens,
+            cachedPromptTokens:
+              data.usage.prompt_tokens_details?.cached_tokens,
           }
         : undefined,
       model,

@@ -14,7 +14,7 @@ import type { CallerContextInputs, ContextResult } from "@/src/hcr/context-engin
 import { createArtifact } from "@/src/runtime/artifacts/create-artifact";
 import { executeTool } from "@/lib/tool-executor";
 import { tools } from "@/lib/tools";
-import { getEmbeddings } from "@/lib/embeddings";
+import { getEmbeddingsWithCache } from "@/lib/embeddings";
 import {
   callRoutedChat,
   estimateMessagesTokens,
@@ -258,6 +258,7 @@ async function markNodeCompleted(
 async function resolvePromptEmbedding(input: {
   prompt: string;
   enabled: boolean;
+  projectId: string;
   executionId: string;
   nodeId: string;
   nodeType: NodeType;
@@ -283,7 +284,24 @@ async function resolvePromptEmbedding(input: {
   }
 
   try {
-    return await getEmbeddings(input.prompt);
+    const { embedding, outcome, keyDigest } = await getEmbeddingsWithCache(
+      input.prompt,
+      { projectId: input.projectId },
+    );
+    await prisma.runtimeEvent.create({
+      data: {
+        executionId: input.executionId,
+        nodeId: input.nodeId,
+        type: "cache.lookup",
+        payload: {
+          nodeType: input.nodeType,
+          namespace: "embedding",
+          outcome,
+          keyDigest,
+        },
+      },
+    });
+    return embedding;
   } catch (error) {
     await prisma.runtimeEvent.create({
       data: {
@@ -430,6 +448,7 @@ export async function executeNode(
     const promptEmbedding = await resolvePromptEmbedding({
       prompt,
       enabled: nodeConfig.contextConfig.includeVectorSearch,
+      projectId,
       executionId,
       nodeId,
       nodeType: nodeConfig.nodeType,
@@ -501,6 +520,7 @@ export async function executeNode(
     const promptEmbedding = await resolvePromptEmbedding({
       prompt,
       enabled: nodeConfig.contextConfig.includeVectorSearch,
+      projectId,
       executionId,
       nodeId,
       nodeType: nodeConfig.nodeType,

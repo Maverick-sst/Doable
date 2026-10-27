@@ -38,6 +38,7 @@ embedding job have been removed. File embeddings now run through
 | `src/runtime/artifacts` | `createArtifact`, `getLatestArtifact` | Project-wide artifact revisions, hashes, events |
 | `src/runtime/files` | `create/read/update/delete/listProjectFile` | DB metadata + workspace bytes + embeddings |
 | `src/runtime/workspace` | `write/read/delete/list/export` | Safe paths, atomic writes, manifest, ZIP |
+| `src/runtime/cache` | `getOrLoad`, `invalidateProjectCache`, `cacheSnapshot` | Scoped derived-state cache; hot + durable, fail-open |
 | `src/temporal/runtime` | `startBuild`, `cancelBuild`, `retryBuild` | Product-state creation + Temporal start |
 | `src/hcr/context-engine` | `buildContext` | Retrieval + pure assembly |
 
@@ -230,6 +231,38 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
   live route, egress state, prompt ceiling, candidate reasons, and breaker
   state. `bun scripts/verify-routing.ts` is the no-network acceptance drill.
 
+## Derived cache (D6, 2026-10-27)
+
+- `src/runtime/cache` owns all derived-value caching. Keys are SHA-256
+  digests of namespace, scope (`projectId`, `userId`, `agentType`,
+  `configHash`, `providerId`, `modelId`), source version, and source
+  identity; raw source content and prompts are never part of a key.
+- Reads check a bounded in-process LRU (`CACHE_HOT_ENTRIES`) before the
+  durable `DerivedCache` row, and write both on a miss. Expired entries are
+  ignored. Concurrent misses for one key share a single load.
+- Any durable read/write failure, invalid value, or disabled cache falls
+  through to the loader; failures increment metrics only. A poisoned or
+  malformed value is rejected by the caller's validator and reloaded.
+- Embeddings are the first consumer. `lib/embeddings.ts` scopes vectors by
+  project and by `ModelProvider.embeddingModelId`, so switching provider or
+  embedding model misses the old entry. `CACHE_EMBEDDING_TTL_DAYS` controls
+  retention; `CACHE_DISABLED` bypasses storage.
+- Prompt embeddings record `cache.lookup` with namespace, outcome, and key
+  digest (no content). File and memory embeddings contribute metrics only.
+- Provider-native prompt-cache usage is normalized into
+  `ChatUsage.cachedPromptTokens` (OpenRouter/RunAnywhere
+  `prompt_tokens_details.cached_tokens`); `model.usage` adds
+  `cachedPromptTokens` and `promptCacheSource` (`provider` or `unsupported`).
+  Ollama exposes no equivalent and reports `unsupported`.
+- Project deletion clears hot entries immediately and relies on the
+  `DerivedCache` FK cascade for durable rows. `pruneExpiredCache()` is the
+  hook for the D10 maintenance workflow.
+- `/api/health` exposes `cache`, and Settings renders enabled state, hot
+  entries, and per-namespace hit/miss/failure/write counts.
+- `bun scripts/verify-cache.ts` is the no-network acceptance drill;
+  `tests/cache.test.ts` covers scoping, TTL, invalidation, validation,
+  failure fallback, and concurrent loads.
+
 ## Not yet verified
 
 
@@ -237,6 +270,8 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
 - Browser-level E2E (the API golden path is verified; the UI is built but not
   driven by Playwright yet).
 - Worker-restart-during-activity drill.
+- Durable cache behavior against a real Postgres and under multi-process
+  workers; unit tests and the drill use the in-memory adapter.
 - Verification sandbox (build/test execution). Structural checks only today.
 - Desktop packaging and REA/Alan feature-gap evidence.
 
@@ -249,5 +284,6 @@ These are the next verification gates; do not claim them until they run.
   runner does not).
 - Bounded repair workflow.
 - Model-assisted memory extraction (D4 curation is deterministic).
+- Scheduled cache pruning and cache-refresh maintenance (D10).
 - Desktop shell packaging.
 - REA/Alan feature-gap matrix (evidence not collected yet).

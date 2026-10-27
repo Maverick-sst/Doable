@@ -74,6 +74,9 @@ function normalizeToolCalls(calls: OllamaToolCall[] | undefined): NormalizedTool
 export const ollamaProvider: ModelProvider = {
   id: "ollama",
   capabilities: { chat: true, tools: true, embeddings: true },
+  get embeddingModelId() {
+    return embeddingModel();
+  },
 
   async chat(request: ChatRequest): Promise<ChatResult> {
     const model = request.model ?? chatModel();

@@ -27,6 +27,7 @@ type RunAnywhereResponse = {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
   };
   error?: { message?: string; code?: string };
 };
@@ -90,6 +91,7 @@ function normalizeToolCalls(
 export const runAnywhereProvider: ModelProvider = {
   id: "runanywhere",
   capabilities: { chat: true, tools: true, embeddings: false },
+  embeddingModelId: null,
 
   async chat(request: ChatRequest): Promise<ChatResult> {
     const model = request.model ?? process.env.MODEL ?? DEFAULT_MODEL;
@@ -131,6 +133,8 @@ export const runAnywhereProvider: ModelProvider = {
             promptTokens: data.usage.prompt_tokens,
             completionTokens: data.usage.completion_tokens,
             totalTokens: data.usage.total_tokens,
+            cachedPromptTokens:
+              data.usage.prompt_tokens_details?.cached_tokens,
           }
         : undefined,
       model: data.model ?? model,
