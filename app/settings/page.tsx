@@ -17,6 +17,33 @@ type Health = {
   workspaceRoot: string;
   authMode: string;
   provider: string;
+  providerCapabilities: {
+    chat: boolean;
+    tools: boolean;
+    embeddings: boolean;
+  } | null;
+  routing: {
+    localOnly: boolean;
+    modelId: string | null;
+    providerId: string | null;
+    model: string | null;
+    locality: "local" | "remote" | null;
+    reason: string | null;
+    contextWindow: number | null;
+    maxPromptTokens: number | null;
+    candidates: Array<{
+      id: string;
+      eligible: boolean;
+      reason: string;
+    }>;
+    error: string | null;
+  };
+  providerHealth: Array<{
+    providerId: string;
+    failures: number;
+    open: boolean;
+    openedAt: string | null;
+  }>;
   timestamp: string;
 };
 
@@ -127,6 +154,80 @@ export default function SettingsPage() {
 
         <Card className="lg:col-span-2">
           <CardHeader
+            title="Model routing and egress"
+            description="The live route the next model call would take, and whether local-only is enforced."
+          />
+          <CardBody className="space-y-3 text-xs">
+            {!health ? (
+              <Spinner label="Resolving route" />
+            ) : health.routing.error ? (
+              <>
+                <Badge tone="danger">unroutable</Badge>
+                <p className="break-words text-rose-600 dark:text-rose-400">
+                  {health.routing.error}
+                </p>
+                <CandidateList candidates={health.routing.candidates} />
+              </>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-zinc-600 dark:text-zinc-300">Route</span>
+                  <span className="flex items-center gap-2">
+                    <Badge tone="info">{health.routing.modelId}</Badge>
+                    <Badge
+                      tone={
+                        health.routing.locality === "local" ? "success" : "warning"
+                      }
+                    >
+                      {health.routing.locality ?? "unknown"}
+                    </Badge>
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600 dark:text-zinc-300">Egress</span>
+                  <Badge
+                    tone={health.routing.localOnly ? "success" : "warning"}
+                  >
+                    {health.routing.localOnly
+                      ? "local-only enforced"
+                      : health.routing.locality === "remote"
+                        ? "remote egress enabled"
+                        : "local"}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600 dark:text-zinc-300">
+                    Prompt ceiling
+                  </span>
+                  <span className="text-zinc-500 dark:text-zinc-400">
+                    {health.routing.maxPromptTokens?.toLocaleString() ?? "unknown"}{" "}
+                    of {health.routing.contextWindow?.toLocaleString() ?? "unknown"}{" "}
+                    tokens
+                  </span>
+                </div>
+                <CandidateList candidates={health.routing.candidates} />
+                <div className="flex items-center justify-between border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                  <span className="text-zinc-600 dark:text-zinc-300">
+                    Circuit breakers
+                  </span>
+                  <span className="text-zinc-500 dark:text-zinc-400">
+                    {health.providerHealth.length === 0
+                      ? "all closed"
+                      : health.providerHealth
+                          .map(
+                            (state) =>
+                              `${state.providerId}: ${state.open ? "open" : `${state.failures} failure(s)`}`,
+                          )
+                          .join(" · ")}
+                  </span>
+                </div>
+              </>
+            )}
+          </CardBody>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader
             title="Model configuration"
             description="Choose a local model or an explicitly selected remote provider."
           />
@@ -163,6 +264,35 @@ MODEL=<selected open-weight model>`}</pre>
         </Card>
       </div>
     </AppShell>
+  );
+}
+
+function CandidateList({
+  candidates,
+}: {
+  candidates: Array<{ id: string; eligible: boolean; reason: string }>;
+}) {
+  if (candidates.length === 0) return null;
+  return (
+    <details className="rounded border border-zinc-200 p-3 dark:border-zinc-800">
+      <summary className="cursor-pointer text-zinc-600 dark:text-zinc-300">
+        Candidate evaluation ({candidates.filter((c) => c.eligible).length}{" "}
+        eligible)
+      </summary>
+      <ul className="mt-2 space-y-1">
+        {candidates.slice(0, 8).map((candidate) => (
+          <li
+            key={candidate.id}
+            className="flex items-center justify-between gap-2"
+          >
+            <code className="break-all text-[11px]">{candidate.id}</code>
+            <Badge tone={candidate.eligible ? "success" : "neutral"}>
+              {candidate.reason}
+            </Badge>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

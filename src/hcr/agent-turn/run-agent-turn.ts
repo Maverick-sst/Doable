@@ -1,5 +1,6 @@
 import type { LLmMessage } from "@/src/shared/types";
 import type { ChatResult } from "@/src/providers";
+import { estimateUsageCost } from "@/src/providers/cost";
 import {
   AgentTurnOutputError,
   type AgentToolHistoryEntry,
@@ -13,7 +14,9 @@ const MAX_STRUCTURED_ATTEMPTS = 3;
 async function emitUsage(
   input: RunAgentTurnInput,
   response: ChatResult,
+  latencyMs: number,
 ): Promise<void> {
+  const cost = estimateUsageCost(response.usage);
   await input.onEvent?.({
     type: "model.usage",
     payload: {
@@ -22,6 +25,10 @@ async function emitUsage(
       promptTokens: response.usage?.promptTokens ?? null,
       completionTokens: response.usage?.completionTokens ?? null,
       totalTokens: response.usage?.totalTokens ?? null,
+      latencyMs,
+      usageSource: response.usage ? "provider" : "unavailable",
+      estimatedCostUsd: cost.totalCostUsd,
+      costSource: cost.configured ? "configured_flat_rate" : "unconfigured",
     },
   });
 }
@@ -43,12 +50,13 @@ async function runStructuredTurn(
   let failures = 0;
 
   while (failures < MAX_STRUCTURED_ATTEMPTS) {
+    const callStarted = now();
     const response = await input.model.call({
       messages,
       tools: [],
       responseFormat: "json",
     });
-    await emitUsage(input, response);
+    await emitUsage(input, response, now() - callStarted);
 
     const content = response.content ?? "";
     try {
@@ -139,8 +147,9 @@ async function runToolTurn(
       ? await input.nextMessages({ toolHistory, iteration: iterations, scratchpad })
       : input.messages;
 
+    const callStarted = now();
     const response = await input.model.call({ messages, tools: allowedTools });
-    await emitUsage(input, response);
+    await emitUsage(input, response, now() - callStarted);
 
     if (!response.content && response.toolCalls.length === 0) {
       return {

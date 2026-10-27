@@ -1,7 +1,7 @@
 import { MemoryStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEmbeddings } from "@/lib/embeddings";
-import { getProviderCapabilities } from "@/src/providers";
+import { getProviderCapabilitiesOrNull } from "@/src/providers";
 import { MEMORY_MAX_CONTENT_CHARS } from "./policy";
 import type { MemoryEmbeddingResult } from "./types";
 
@@ -22,7 +22,7 @@ export async function embedMemoryEntries(
   };
   if (ids.length === 0) return result;
 
-  if (!getProviderCapabilities().embeddings) {
+  if (!getProviderCapabilitiesOrNull()?.embeddings) {
     result.skipped = ids.length;
     return result;
   }

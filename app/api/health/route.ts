@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthMode } from "@/src/auth";
-import { getProviderCapabilities, getProviderId } from "@/src/providers";
+import {
+  getProviderCapabilitiesOrNull,
+  getProviderId,
+  providerHealthSnapshot,
+  routingSnapshot,
+  type ProviderCapabilities,
+} from "@/src/providers";
 import {
   ensureTemporalConnected,
   getTemporalHost,
@@ -44,6 +50,16 @@ export async function GET() {
     checkTemporal(),
   ]);
 
+  const routing = routingSnapshot();
+  let providerId = routing.providerId ?? "unavailable";
+  let providerCapabilities: ProviderCapabilities | null = null;
+  try {
+    providerId = getProviderId();
+    providerCapabilities = getProviderCapabilitiesOrNull();
+  } catch {
+    // The routing snapshot already carries the actionable configuration error.
+  }
+
   const body = {
     database,
     temporal: {
@@ -53,8 +69,10 @@ export async function GET() {
     },
     workspaceRoot: getWorkspaceRoot(),
     authMode: getAuthMode(),
-    provider: getProviderId(),
-    providerCapabilities: getProviderCapabilities(),
+    provider: providerId,
+    providerCapabilities,
+    routing,
+    providerHealth: providerHealthSnapshot(),
     timestamp: new Date().toISOString(),
   };
 

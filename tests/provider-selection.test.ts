@@ -9,6 +9,7 @@ const original = {
   ollama: process.env.OLLAMA_BASE_URL,
   runanywhere: process.env.RUNANYWHERE_API_KEY,
   openrouter: process.env.OPENROUTER_API_KEY,
+  localOnly: process.env.MODEL_LOCAL_ONLY,
 };
 
 function restore() {
@@ -20,6 +21,8 @@ function restore() {
   else process.env.RUNANYWHERE_API_KEY = original.runanywhere;
   if (original.openrouter === undefined) delete process.env.OPENROUTER_API_KEY;
   else process.env.OPENROUTER_API_KEY = original.openrouter;
+  if (original.localOnly === undefined) delete process.env.MODEL_LOCAL_ONLY;
+  else process.env.MODEL_LOCAL_ONLY = original.localOnly;
 }
 
 afterEach(restore);
@@ -51,5 +54,15 @@ describe("Provider selection", () => {
     process.env.RUNANYWHERE_API_KEY = "test-key";
     process.env.MODEL_PROVIDER = "runanywhere";
     expect(getProviderId()).toBe("runanywhere");
+  });
+
+  test("local-only replaces a remote default with an eligible local provider", () => {
+    delete process.env.OLLAMA_BASE_URL;
+    process.env.MODEL_PROVIDER = "openrouter";
+    process.env.OPENROUTER_API_KEY = "test-key";
+    process.env.MODEL_LOCAL_ONLY = "true";
+
+    expect(getProviderId()).toBe("ollama");
+    expect(getProviderCapabilities().embeddings).toBe(true);
   });
 });

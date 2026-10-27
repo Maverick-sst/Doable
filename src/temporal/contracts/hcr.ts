@@ -110,6 +110,8 @@ export function isHcrDomainFailure(message: string): boolean {
   return (
     message.includes("Failed to parse/validate") ||
     message.includes("without mark_complete") ||
+    message.includes("No eligible model") ||
+    message.includes("Model token budget exceeded") ||
     message.includes("not found") ||
     message.includes("does not belong")
   );
