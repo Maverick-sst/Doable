@@ -80,6 +80,14 @@ const SOURCES: DefinitionSource[] = [
     outputContract: TOOL_OUTPUT,
     eligibleTools: FILE_TOOL_NAMES,
   },
+  {
+    agentId: "repair-eng",
+    agentType: "REPAIR_ENG",
+    nodeType: NodeType.REPAIR,
+    taskProfile: "implementation",
+    outputContract: TOOL_OUTPUT,
+    eligibleTools: FILE_TOOL_NAMES,
+  },
 ];
 
 function buildConfig(source: DefinitionSource): AgentConfig {

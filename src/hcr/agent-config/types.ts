@@ -14,7 +14,8 @@ export type AgentType =
   | "PRD_REVIEWER"
   | "STAFF_ENGINEER"
   | "FRONTEND_ENG"
-  | "BACKEND_ENG";
+  | "BACKEND_ENG"
+  | "REPAIR_ENG";
 
 /** Declarative capabilities: what the agent may request. Never executes. */
 export type AgentCapability =

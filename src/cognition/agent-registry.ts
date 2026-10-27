@@ -72,6 +72,18 @@ const CONTEXT_CONTRACTS: NodeContextContract[] = [
       includeMessageHistory: false,
     },
   },
+  {
+    nodeType: NodeType.REPAIR,
+    context: {
+      consumedArtifactTypes: [
+        ArtifactType.APPROVED_PRD,
+        ArtifactType.EXECUTION_PLAN,
+      ],
+      includeFileTree: true,
+      includeVectorSearch: true,
+      includeMessageHistory: false,
+    },
+  },
 ];
 
 function buildNodeConfig({

@@ -252,7 +252,7 @@ describe("Removed input seam (locked, not reintroduced)", () => {
   });
 });
 
-describe("Six registry configs keep their current context shape", () => {
+describe("Registry configs keep their current context shape", () => {
   test("structured nodes stay file/history/tool-free", () => {
     const structured = [
       NodeType.ARCHITECT,
@@ -270,7 +270,11 @@ describe("Six registry configs keep their current context shape", () => {
   });
 
   test("file-tool nodes keep tree + vector context without history", () => {
-    for (const nodeType of [NodeType.FRONTEND_ENG, NodeType.BACKEND_ENG]) {
+    for (const nodeType of [
+      NodeType.FRONTEND_ENG,
+      NodeType.BACKEND_ENG,
+      NodeType.REPAIR,
+    ]) {
       const entry = AGENT_REGISTRY[nodeType];
       expect(entry?.outputMode).toBe("tool_calls");
       expect(entry?.contextConfig.includeFileTree).toBe(true);

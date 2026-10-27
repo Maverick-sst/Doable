@@ -1,87 +1,79 @@
-import { VerificationStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import {
-  listWorkspaceFiles,
-  syncProjectWorkspace,
-} from "@/src/runtime/workspace";
 
-export interface StructuralCheckResult {
-  status: VerificationStatus;
-  command: string;
-  exitCode: number;
-  durationMs: number;
-  output: string;
-  revision: string | null;
-}
+export {
+  runSandboxVerification,
+  snapshotHash,
+  type RunVerificationOptions,
+  type VerificationRunResult,
+  type VerificationStep,
+  type VerificationStepStatus,
+} from "./runner";
+export {
+  captureBrowserEvidence,
+  getEvidenceDir,
+  getEvidenceRoot,
+  isPrivateOrLocalHost,
+  saveEvidenceScreenshot,
+  type BrowserEvidence,
+} from "./evidence";
 
-/**
- * V1 verification is deliberately honest: it checks the persistent workspace
- * structure and reports that build/test execution is not run. A future
- * sandbox adapter will replace the `NOT_RUN` branch with real commands and
- * exit codes.
- */
-export async function runStructuralVerification(
-  projectId: string,
-): Promise<StructuralCheckResult> {
-  const started = Date.now();
-  await syncProjectWorkspace(projectId);
-  const files = await listWorkspaceFiles(projectId);
-  const hasPackageJson = files.includes("package.json");
-  const hasSource = files.some(
-    (file) => file.startsWith("src/") || file.startsWith("app/"),
-  );
-
-  const status =
-    files.length > 0 && hasSource
-      ? VerificationStatus.PASSED
-      : VerificationStatus.BLOCKED;
-  const output = JSON.stringify(
-    {
-      kind: "structure-check",
-      fileCount: files.length,
-      hasPackageJson,
-      hasSource,
-      buildOrTests: "not_run",
-      note: "Build/test execution requires the disposable sandbox adapter.",
-    },
-    null,
-    2,
-  );
-
-  return {
-    status,
-    command: "doable-structure-check",
-    exitCode: status === VerificationStatus.PASSED ? 0 : 1,
-    durationMs: Date.now() - started,
-    output,
-    revision: `${files.length} files`,
-  };
-}
-
-export async function recordVerification(input: {
-  projectId: string;
-  executionId?: string | null;
-  nodeId?: string | null;
-  result: StructuralCheckResult;
-}) {
-  return prisma.verificationReport.create({
-    data: {
-      projectId: input.projectId,
-      executionId: input.executionId ?? null,
-      nodeId: input.nodeId ?? null,
-      status: input.result.status,
-      command: input.result.command,
-      exitCode: input.result.exitCode,
-      durationMs: input.result.durationMs,
-      output: input.result.output,
-      revision: input.result.revision,
-    },
-  });
-}
+const VERIFICATION_SELECT = {
+  id: true,
+  projectId: true,
+  executionId: true,
+  nodeId: true,
+  status: true,
+  command: true,
+  exitCode: true,
+  durationMs: true,
+  output: true,
+  revision: true,
+  snapshotHash: true,
+  previewUrl: true,
+  steps: true,
+  evidence: true,
+  parentReportId: true,
+  attempt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 export async function latestVerification(projectId: string) {
   return prisma.verificationReport.findFirst({
     where: { projectId },
     orderBy: { createdAt: "desc" },
+    select: VERIFICATION_SELECT,
+  });
+}
+
+export async function listVerificationAttempts(projectId: string) {
+  return prisma.verificationReport.findMany({
+    where: { projectId },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: {
+      id: true,
+      status: true,
+      attempt: true,
+      snapshotHash: true,
+      previewUrl: true,
+      parentReportId: true,
+      createdAt: true,
+    },
+  });
+}
+
+export async function latestPassingReport(
+  projectId: string,
+  snapshotHash?: string,
+) {
+  return prisma.verificationReport.findFirst({
+    where: {
+      projectId,
+      status: "PASSED",
+      ...(snapshotHash ? { snapshotHash } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, snapshotHash: true, previewUrl: true, createdAt: true },
   });
 }

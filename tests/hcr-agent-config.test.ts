@@ -9,6 +9,7 @@ import {
   STAFF_ENGINEER_SYSTEM_PROMPT,
   FRONTEND_ENGINEER_SYSTEM_PROMPT,
   BACKEND_ENGINEER_SYSTEM_PROMPT,
+  REPAIR_ENGINEER_SYSTEM_PROMPT,
 } from "@/src/cognition/prompts";
 import {
   AGENT_CATALOG_VERSION,
@@ -36,6 +37,7 @@ const EXPECTED_AGENTS: AgentType[] = [
   "STAFF_ENGINEER",
   "FRONTEND_ENG",
   "BACKEND_ENG",
+  "REPAIR_ENG",
 ];
 
 const PROMPTS: Record<AgentType, string> = {
@@ -45,6 +47,7 @@ const PROMPTS: Record<AgentType, string> = {
   STAFF_ENGINEER: STAFF_ENGINEER_SYSTEM_PROMPT,
   FRONTEND_ENG: FRONTEND_ENGINEER_SYSTEM_PROMPT,
   BACKEND_ENG: BACKEND_ENGINEER_SYSTEM_PROMPT,
+  REPAIR_ENG: REPAIR_ENGINEER_SYSTEM_PROMPT,
 };
 
 const NODE_FOR_AGENT: Record<AgentType, NodeType> = {
@@ -54,10 +57,11 @@ const NODE_FOR_AGENT: Record<AgentType, NodeType> = {
   STAFF_ENGINEER: NodeType.PLANNER,
   FRONTEND_ENG: NodeType.FRONTEND_ENG,
   BACKEND_ENG: NodeType.BACKEND_ENG,
+  REPAIR_ENG: NodeType.REPAIR,
 };
 
 describe("Agent catalog (§5A/§5G stable state)", () => {
-  test("catalog holds exactly the six existing roles — no invented agents", () => {
+  test("catalog holds the six build roles plus the bounded repair role", () => {
     expect(Object.keys(AGENT_DEFINITIONS).sort()).toEqual(
       [...EXPECTED_AGENTS].sort(),
     );
@@ -175,6 +179,7 @@ describe("Tool eligibility (names only, catalog never loaded)", () => {
     for (const agentType of [
       "FRONTEND_ENG",
       "BACKEND_ENG",
+      "REPAIR_ENG",
     ] as AgentType[]) {
       const config = await agentConfigProvider.resolve({ agentType });
       expect(config.toolPolicy.eligibleTools).toEqual(expected);
@@ -191,6 +196,7 @@ describe("Model policy (preferences only, no provider)", () => {
       STAFF_ENGINEER: "planning",
       FRONTEND_ENG: "implementation",
       BACKEND_ENG: "implementation",
+      REPAIR_ENG: "implementation",
     };
     for (const agentType of EXPECTED_AGENTS) {
       const config = await agentConfigProvider.resolve({ agentType });

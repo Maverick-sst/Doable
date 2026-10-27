@@ -3,6 +3,7 @@ import {
   BACKEND_ENGINEER_SYSTEM_PROMPT,
   FRONTEND_ENGINEER_SYSTEM_PROMPT,
   PRD_REVIEWER_SYSTEM_PROMPT,
+  REPAIR_ENGINEER_SYSTEM_PROMPT,
   RESEARCHER_SYSTEM_PROMPT,
   STAFF_ENGINEER_SYSTEM_PROMPT,
 } from "@/src/cognition/prompts";
@@ -39,4 +40,5 @@ export const AGENT_PROMPTS: Record<AgentType, VersionedPrompt> = {
   STAFF_ENGINEER: versionedPrompt("staff-engineer-system", STAFF_ENGINEER_SYSTEM_PROMPT),
   FRONTEND_ENG: versionedPrompt("frontend-engineer-system", FRONTEND_ENGINEER_SYSTEM_PROMPT),
   BACKEND_ENG: versionedPrompt("backend-engineer-system", BACKEND_ENGINEER_SYSTEM_PROMPT),
+  REPAIR_ENG: versionedPrompt("repair-engineer-system", REPAIR_ENGINEER_SYSTEM_PROMPT),
 };

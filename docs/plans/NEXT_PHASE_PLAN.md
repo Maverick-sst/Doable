@@ -1,6 +1,8 @@
 # Doable — Next Phase Implementation Plan
 
-Status: **planned, not started**
+Status: **D1–D7 landed; D8/D9 implemented, live sandbox acceptance pending;
+D10–D12 planned.** See `docs/architecture/current-state.md` for the verified
+state and the remaining sandbox drill.
 Branch base: `main` @ `fa285a2` (merge of `v1.1/foundation` @ `782dc72`)
 Spec source: `Doable-Authoritative-Full-Product-Implementation-Spec.md` (attached by maintainer)
 Plan owner: Alan

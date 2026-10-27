@@ -421,23 +421,37 @@ model GitHubPush {
 }
 
 model VerificationReport {
-  id          String             @id @default(cuid())
-  projectId   String
-  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  executionId String?
-  execution   Execution?         @relation(fields: [executionId], references: [id], onDelete: SetNull)
-  nodeId      String?
-  node        Node?              @relation(fields: [nodeId], references: [id], onDelete: SetNull)
-  status      VerificationStatus @default(NOT_RUN)
-  command     String?            @db.Text
-  exitCode    Int?
-  durationMs  Int?
-  output      String?            @db.Text
-  revision    String?
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  id             String             @id @default(cuid())
+  projectId      String
+  project        Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  executionId    String?
+  execution      Execution?         @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  nodeId         String?
+  node           Node?              @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  status         VerificationStatus @default(NOT_RUN)
+  command        String?            @db.Text
+  exitCode       Int?
+  durationMs     Int?
+  output         String?            @db.Text
+  revision       String?
+  /// SHA-256 of the exact workspace snapshot the checks ran against.
+  snapshotHash   String?
+  /// Loopback preview URL while the port-forward is alive.
+  previewUrl     String?
+  /// Ordered install/build/test/preview steps with bounded output.
+  steps          Json?
+  /// Browser + build evidence (screenshot path, console errors, DOM, logs).
+  evidence       Json?
+  /// Prior report this attempt repaired, when part of a repair loop.
+  parentReportId String?
+  parentReport   VerificationReport? @relation("VerificationAttempts", fields: [parentReportId], references: [id], onDelete: SetNull)
+  reports        VerificationReport[] @relation("VerificationAttempts")
+  attempt        Int                @default(1)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
   @@index([projectId, createdAt])
+  @@index([parentReportId])
 }
 
 
