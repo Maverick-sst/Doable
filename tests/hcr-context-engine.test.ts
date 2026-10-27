@@ -54,7 +54,14 @@ describe("Context assembly ordering", () => {
   test("history and tool messages slot between blob and final prompt", () => {
     const input = baseInput();
     input.policy.includeMessageHistory = true;
-    input.messages = [{ role: "USER", content: "hi" }];
+    input.messages = [
+      {
+        id: "m1",
+        role: "USER",
+        content: "hi",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
     input.outputMode = "tool_calls";
     input.toolHistory = [
       { role: "tool", content: "out", tool_call_id: "c1" },
@@ -157,8 +164,18 @@ describe("Message history gate", () => {
     const input = baseInput();
     input.policy.includeMessageHistory = true;
     input.messages = [
-      { role: "USER", content: "q" },
-      { role: "ASSISTANT", content: "a" },
+      {
+        id: "m1",
+        role: "USER",
+        content: "q",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "m2",
+        role: "ASSISTANT",
+        content: "a",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
     ];
     const messages = assembleContext(input);
     expect(messages[2]).toEqual({ role: "user", content: "q" });

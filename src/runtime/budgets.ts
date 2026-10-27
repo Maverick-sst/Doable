@@ -24,6 +24,20 @@ function intFromEnv(name: string, fallback: number): number {
 export const STRUCTURED_NODE_ITERATIONS = 1;
 
 /**
+ * Assembled-context ceiling, in estimated tokens. V2 compacts relevant and
+ * optional sources to fit; required sources are kept in full and reported as
+ * overflow. 60k tokens keeps current runs effectively unchanged.
+ */
+export const DEFAULT_CONTEXT_TOKEN_BUDGET = 60_000;
+
+export function resolveContextBudget(): number {
+  return intFromEnv(
+    "CONTEXT_TOKEN_BUDGET",
+    DEFAULT_CONTEXT_TOKEN_BUDGET,
+  );
+}
+
+/**
  * Tool nodes: one model turn per iteration, roughly one file per turn.
  *
  * The env var is deliberately named NODE_MAX_ITERATIONS and not the legacy

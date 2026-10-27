@@ -180,12 +180,25 @@ async function main() {
 
   const events = await prisma.runtimeEvent.findMany({
     where: { executionId: run.executionId },
-    select: { type: true },
+    select: { type: true, payload: true },
   });
   assert(
     events.some((event) => event.type === "workflow.completed"),
     "workflow.completed event exists",
   );
+
+  const contextEvents = events.filter(
+    (event) => event.type === "context.assembled",
+  );
+  assert(contextEvents.length >= 6, "every node assembled context with provenance");
+  for (const event of contextEvents) {
+    const payload = event.payload as { fingerprint?: unknown } | null;
+    assert(
+      typeof payload?.fingerprint === "string" &&
+        payload.fingerprint.startsWith("sha256:"),
+      "context.assembled carries a reproducibility fingerprint",
+    );
+  }
 
   const summary = {
     projectId: project.id,

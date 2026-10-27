@@ -608,3 +608,105 @@ The local containers were stopped after verification; volumes were preserved.
 **D3 — Context Engine V2.** Typed sources, ranking, token budgets, compaction,
 provenance, and reproducibility after worker restart. D2 unblocks D3 because
 the context policy now hangs off a stable agent configuration.
+
+## D3 — Context Engine V2 — COMPLETE (2026-10-27)
+
+### Scope delivered
+
+- **Typed provenance.** Every considered source becomes a
+  `ContextSourceReference` with kind, id, label (type/path/message id),
+  version or `updatedAt`, status (`available`/`stale`/`missing`), priority,
+  inclusion, and a drop reason. Source content never enters the manifest.
+- **Opt-in source retrieval.** Verification reports, prior failed/incomplete
+  nodes, and curated `ProjectMemory` are retrievable behind policy flags.
+  Requirements and plans continue to arrive as consumed artifacts.
+- **Conversation facts.** Intent (earliest user message), unresolved questions
+  (latest user messages containing `?`), and pending approvals (latest
+  messages mentioning approval) are pinned and cannot be compacted away.
+- **Ranking and deduplication.** Required sources first, then operational
+  relevance (verification → failures → memory → relevant files → file tree),
+  then newest optional sources. Duplicate ids/paths are dropped with a
+  provenance record.
+- **Token budget and compaction.** `CONTEXT_TOKEN_BUDGET` (default 60,000,
+  floor 1,000) is enforced with a 4-chars/token estimate. Required sources are
+  never truncated; overflow is reported. Everything else is admitted
+  newest/most-relevant first with per-section omission notes.
+- **Structural compaction.** Message history keeps the newest messages that
+  fit, tool history trims newest-first and prunes orphan tool results, the
+  file tree caps at 200 paths, and the scratchpad keeps its last-8 window.
+- **Reproducibility.** Deterministic retrieval tie-breaks, a pure selection
+  pass, and `fingerprintContext` over stable fields only. The node executor
+  emits `context.assembled` with fingerprint, budget, and source references.
+- **Parity.** With no budget pressure and the V2 flags off, assembly output is
+  byte-identical to the D2 behavior (locked by tests).
+
+### Design decisions
+
+- **V2 is policy-gated, not always-on.** New sources require explicit flags
+  and the default budget is generous, so the six HCR agents keep their current
+  context shape until a consumer opts in. This keeps the acceptance rule
+  "existing fixtures retain expected behavior" literal.
+- **Compaction is structural, not model-generated.** Pinning + truncation +
+  omission notes are deterministic and restart-safe; a summarizer would add a
+  model call and a verification problem.
+- **Budget units are estimates.** 4 characters/token is documented and
+  deterministic. Exact tokenizer parity is a later concern.
+- **Staleness is evidence-based.** A verification report is stale when a
+  workspace file changed after the report was created.
+
+### Commands run and results
+
+| Command / drill | Result |
+|---|---|
+| `bun run typecheck` | Pass |
+| `bun test` | 87 pass, 0 fail |
+| `bun run lint` | Pass |
+| `bun run build` | Pass |
+| `bun scripts/verify-context.ts` (local Postgres) | Pass: 67 messages compacted into a 1,000-token budget (995 used), intent/questions/approval preserved, stale verification visible, 127 provenance refs, fingerprint stable across calls, different budget changes the fingerprint |
+| `bun scripts/verify-temporal.ts` (mock provider) | Pass: 6 nodes, 4 artifacts, 2 files, 51 events, every node emitted `context.assembled` with a `sha256:` fingerprint |
+| `NODE_MAX_ITERATIONS=3 MOCK_NEVER_COMPLETE=1 bun scripts/verify-budget.ts` | Pass: INCOMPLETE/PARTIAL, 2 budget events, 6 files preserved |
+| `MOCK_FAIL_NODE=PLANNER MOCK_FAIL_TIMES=3 bun scripts/verify-resume.ts` | Pass: attempt 1 FAILED, attempt 2 resumed at PLANNER, upstream artifacts stayed v1 |
+
+The local containers were stopped after verification; volumes were preserved.
+
+### Changed files
+
+| File | Change |
+|---|---|
+| `src/hcr/context-engine/types.ts` | V2 policy flags, budget, provenance, facts, result metadata |
+| `src/hcr/context-engine/facts.ts` | New: intent/question/approval extraction |
+| `src/hcr/context-engine/selection.ts` | New: ranking, dedup, budget, compaction, fingerprint |
+| `src/hcr/context-engine/assembler.ts` | Facts/notes sections, file-tree cap; parity when absent |
+| `src/hcr/context-engine/engine.ts` | Orchestrate retrieval → facts → selection → assembly |
+| `src/hcr/context-engine/index.ts` | Export the V2 surface |
+| `src/hcr/context-engine/CONTEXT_MAP.md`, `DEFERRED.md` | V2 map and revised deferrals |
+| `src/hcr/context-engine/retrievers/artifacts.ts` | Missing-artifact reporting + provenance |
+| `src/hcr/context-engine/retrievers/files.ts` | `updatedAt` provenance |
+| `src/hcr/context-engine/retrievers/message-history.ts` | Wider window, ids/timestamps, deterministic order |
+| `src/hcr/context-engine/retrievers/relevant-files.ts` | Id/`updatedAt` provenance |
+| `src/hcr/context-engine/retrievers/{verification,failures,memory}.ts` | New opt-in retrievers |
+| `src/cognition/node-executor.ts` | Pass budget; emit `context.assembled` |
+| `src/runtime/budgets.ts` | `CONTEXT_TOKEN_BUDGET` + `resolveContextBudget()` |
+| `tests/hcr-context-engine-v2.test.ts` | Facts, budget, compaction, dedup, provenance, determinism |
+| `tests/hcr-context-engine.test.ts` | History fixtures carry ids/timestamps |
+| `scripts/verify-context.ts` | New DB-backed acceptance drill |
+| `scripts/verify-temporal.ts` | Assert `context.assembled` fingerprints |
+| `.env.example` | `CONTEXT_TOKEN_BUDGET` |
+
+### Not verified in D3
+
+- The real RunAnywhere model was not re-run after V2 (mock drills only).
+- Model-generated summaries are not used; compaction is structural.
+- The new verification/failure/memory flags are not enabled by any HCR
+  contract yet — they are part of the engine surface, exercised by unit tests
+  and the context drill.
+- Message history remains dormant for the six HCR agents, so production
+  compaction currently applies to tool history, the file tree, and any future
+  history-enabled agent.
+
+### Next
+
+**D4 — Layered memory and curation.** Working, episodic, semantic, procedural,
+and preference memory with provenance, conflicts, retention, deletion
+propagation, and a bounded curation workflow. D3 leaves the memory source and
+provenance contract ready to extend.

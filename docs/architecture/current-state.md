@@ -97,14 +97,15 @@ Run on the current worktree:
 | Command / drill | Result |
 |---|---|
 | `bunx tsc --noEmit --incremental false` | Pass |
-| `bun test` | 75 pass, 0 fail |
+| `bun test` | 87 pass, 0 fail |
 | `bun run lint` (scoped TS/TSX) | Pass |
 | `bun run build` | Pass |
 | `bunx prisma validate` | Pass |
 | `prisma migrate status` on local Postgres | 15 migrations, schema up to date |
 | `scripts/verify-local.ts` | Pass: artifact revisions, one-active-build lock, failure, cancel, late-completion guard, workspace, ZIP |
 | `bun run temporal:hello` | Pass: `Hello, World from Temporal!` |
-| `scripts/verify-temporal.ts` with mock provider | Pass: 6 nodes, 4 build artifacts, 2 files, 43 events, project IDLE; every node records `agentConfigVersion` + `agentConfigHash` |
+| `scripts/verify-temporal.ts` with mock provider | Pass: 6 nodes, 4 build artifacts, 2 files, 51 events, project IDLE; every node records `agentConfigVersion` + `agentConfigHash` and a `context.assembled` fingerprint |
+| `scripts/verify-context.ts` (local Postgres) | Pass: 67 messages compacted into 1,000 tokens, facts preserved, stale verification visible, fingerprint stable |
 | `scripts/verify-budget.ts` with `NODE_MAX_ITERATIONS=3` | Pass: project INCOMPLETE, execution PARTIAL, 2 budget events, 6 files preserved |
 | `scripts/verify-resume.ts` with `MOCK_FAIL_NODE=PLANNER` | Pass: attempt 1 FAILED, attempt 2 resumed at PLANNER, upstream artifacts stayed v1 |
 | `scripts/verify-failure.ts` with `MOCK_FAIL_NODE=PLANNER` | Pass: PLANNER FAILED, ARCHITECT COMPLETED, exactly one `node.failed` |
@@ -151,6 +152,28 @@ RESEARCH 71s, PRD_REVIEWER 51s, PLANNER 67s, BACKEND_ENG 84s, FRONTEND_ENG
 - Context policy still belongs to the Context Engine (D3); agent configuration
   declares the output contract, not retrieval rules.
 
+## Context Engine V2 (D3, 2026-10-27)
+
+- `buildContext` now returns `{ messages, sources, facts, budget, fingerprint }`.
+  Every considered source has a provenance reference (kind, id, label,
+  version/updatedAt, status, priority, inclusion, drop reason); content never
+  enters the manifest.
+- Retrieval covers artifacts, project files, semantic files, message history,
+  verification reports, prior failures, and curated project memory. The last
+  three are opt-in policy flags (`includeVerification`, `includeFailures`,
+  `includeMemory`).
+- Conversation facts pin intent, unresolved questions, and pending approvals
+  so compaction cannot lose them.
+- A deterministic selection pass ranks sources, deduplicates them, enforces a
+  token budget (`CONTEXT_TOKEN_BUDGET`, default 60k, 4 chars/token), and
+  compacts with explicit `=== CONTEXT NOTES ===` omissions. Required sources
+  are never truncated; overflow is reported.
+- Node execution emits `context.assembled` with the fingerprint, budget
+  report, and source references, so the same durable state is reproducible
+  across worker restarts.
+- The six HCR agents keep their existing context shape (V2 flags off, large
+  default budget); parity is locked by tests.
+
 ## Not yet verified
 
 
@@ -169,8 +192,8 @@ These are the next verification gates; do not claim them until they run.
 - Verification workflow/sandbox (the `VerificationReport` model exists; the
   runner does not).
 - Bounded repair workflow.
-- Context Engine V2 (typed sources, ranking, budgets, compaction). Agent
-  configuration V2 and the shared agent turn landed in D2.
+- Layered memory and curation (D4). D3 retrieves the single `ProjectMemory`
+  row when asked and keeps provenance for it.
 - Model routing by role and cost accounting.
 - Desktop shell packaging.
 - REA/Alan feature-gap matrix (evidence not collected yet).
