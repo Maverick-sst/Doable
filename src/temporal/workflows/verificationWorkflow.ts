@@ -6,11 +6,11 @@ import type {
   RunVerificationActivityOutput,
   VerificationWorkflowInput,
   VerificationWorkflowResult,
-} from "@/src/temporal/contracts/verification";
+} from "../contracts/verification";
 import {
   REPAIR_ACTIVITY_TIMEOUT,
   VERIFICATION_ACTIVITY_TIMEOUT,
-} from "@/src/temporal/workflow-timeouts";
+} from "../workflow-timeouts";
 
 const verificationActivities = proxyActivities<{
   runVerificationActivity(
