@@ -1,110 +1,122 @@
-import { NodeType } from "@prisma/client";
-import { AGENT_REGISTRY } from "@/src/cognition/agent-registry";
-import {
-  ARCHITECT_SYSTEM_PROMPT,
-  RESEARCHER_SYSTEM_PROMPT,
-  PRD_REVIEWER_SYSTEM_PROMPT,
-  STAFF_ENGINEER_SYSTEM_PROMPT,
-  FRONTEND_ENGINEER_SYSTEM_PROMPT,
-  BACKEND_ENGINEER_SYSTEM_PROMPT,
-} from "@/src/cognition/prompts";
+import { ArtifactType, NodeType } from "@prisma/client";
+import { resolveNodeBudget } from "@/src/runtime/budgets";
+import { AGENT_CATALOG_VERSION } from "./constants";
+import { AGENT_PROMPTS } from "./prompts";
+import { KNOWN_TOOL_NAMES } from "./tool-names";
 import type {
   AgentConfig,
   AgentType,
   ModelTaskProfile,
+  OutputContract,
 } from "./types";
+import { validateAgentConfig } from "./validation";
 
 interface DefinitionSource {
   agentId: string;
   agentType: AgentType;
   nodeType: NodeType;
-  instructions: string;
   taskProfile: ModelTaskProfile;
+  outputContract: OutputContract;
+  eligibleTools: string[];
 }
 
-// Prompts and limits are referenced — never copied — from the live registry
-// and prompt modules, so the equality tests prove behavioral preservation
-// instead of trusting a duplicated string.
+const FILE_TOOL_NAMES: string[] = [...KNOWN_TOOL_NAMES];
+
+const STRUCTURED_OUTPUT = (artifactType: ArtifactType): OutputContract => ({
+  artifactType,
+  mode: "structured_json",
+});
+
+const TOOL_OUTPUT: OutputContract = { artifactType: null, mode: "tool_calls" };
+
+// The six existing roles, in workflow order. Node type is recorded so the
+// PLANNER → STAFF_ENGINEER divergence stays explicit (§5B).
 const SOURCES: DefinitionSource[] = [
   {
     agentId: "architect",
     agentType: "ARCHITECT",
     nodeType: NodeType.ARCHITECT,
-    instructions: ARCHITECT_SYSTEM_PROMPT,
     taskProfile: "reasoning",
+    outputContract: STRUCTURED_OUTPUT(ArtifactType.ARCHITECTURE_SPEC),
+    eligibleTools: [],
   },
   {
     agentId: "researcher",
     agentType: "RESEARCHER",
     nodeType: NodeType.RESEARCH,
-    instructions: RESEARCHER_SYSTEM_PROMPT,
     taskProfile: "reasoning",
+    outputContract: STRUCTURED_OUTPUT(ArtifactType.RESEARCH_DOSSIER),
+    eligibleTools: [],
   },
   {
     agentId: "prd-reviewer",
     agentType: "PRD_REVIEWER",
     nodeType: NodeType.PRD_REVIEWER,
-    instructions: PRD_REVIEWER_SYSTEM_PROMPT,
     taskProfile: "reasoning",
+    outputContract: STRUCTURED_OUTPUT(ArtifactType.APPROVED_PRD),
+    eligibleTools: [],
   },
   {
     agentId: "staff-engineer",
     agentType: "STAFF_ENGINEER",
     nodeType: NodeType.PLANNER,
-    instructions: STAFF_ENGINEER_SYSTEM_PROMPT,
     taskProfile: "planning",
+    outputContract: STRUCTURED_OUTPUT(ArtifactType.EXECUTION_PLAN),
+    eligibleTools: [],
   },
   {
     agentId: "frontend-eng",
     agentType: "FRONTEND_ENG",
     nodeType: NodeType.FRONTEND_ENG,
-    instructions: FRONTEND_ENGINEER_SYSTEM_PROMPT,
     taskProfile: "implementation",
+    outputContract: TOOL_OUTPUT,
+    eligibleTools: FILE_TOOL_NAMES,
   },
   {
     agentId: "backend-eng",
     agentType: "BACKEND_ENG",
     nodeType: NodeType.BACKEND_ENG,
-    instructions: BACKEND_ENGINEER_SYSTEM_PROMPT,
     taskProfile: "implementation",
+    outputContract: TOOL_OUTPUT,
+    eligibleTools: FILE_TOOL_NAMES,
   },
 ];
 
-const FILE_TOOL_NAMES = [
-  "create_file",
-  "edit_file",
-  "read_file",
-  "delete_file",
-  "mark_complete",
-];
-
 function buildConfig(source: DefinitionSource): AgentConfig {
-  const registryEntry = AGENT_REGISTRY[source.nodeType];
-  if (!registryEntry) {
-    throw new Error(
-      `AGENT_REGISTRY has no entry for ${String(source.nodeType)}`,
-    );
-  }
+  const prompt = AGENT_PROMPTS[source.agentType];
+  const usesFileTools = source.eligibleTools.length > 0;
 
-  const usesFileTools = registryEntry.usesFileTools;
-
-  return {
-    agentId: source.agentId,
-    agentType: source.agentType,
-    instructions: source.instructions,
-    capabilities: usesFileTools
-      ? ["filesystem-access", "code-generation", "database-reads"]
-      : ["research", "artifact-creation", "database-reads"],
-    toolPolicy: { eligibleTools: usesFileTools ? [...FILE_TOOL_NAMES] : [] },
-    modelPolicy: { taskProfile: source.taskProfile, allowFallback: true },
-    executionPolicy: { maxIterations: registryEntry.maxIterations },
-    version: "1",
-  };
+  // Validation runs while the catalog is built, so a malformed definition
+  // cannot reach an execution path.
+  return validateAgentConfig(
+    {
+      agentId: source.agentId,
+      agentType: source.agentType,
+      instructions: prompt.content,
+      prompt: {
+        id: prompt.id,
+        version: prompt.version,
+        hash: prompt.hash,
+      },
+      capabilities: usesFileTools
+        ? ["filesystem-access", "code-generation", "database-reads"]
+        : ["research", "artifact-creation", "database-reads"],
+      toolPolicy: { eligibleTools: [...source.eligibleTools] },
+      modelPolicy: { taskProfile: source.taskProfile, allowFallback: true },
+      executionPolicy: {
+        maxIterations: resolveNodeBudget(source.outputContract.mode).maxIterations,
+      },
+      outputContract: source.outputContract,
+      version: AGENT_CATALOG_VERSION,
+    },
+    `catalog:${source.agentType}`,
+  );
 }
 
-export const AGENT_DEFINITIONS: Record<AgentType, AgentConfig> = Object.fromEntries(
-  SOURCES.map((source) => [source.agentType, buildConfig(source)]),
-) as Record<AgentType, AgentConfig>;
+export const AGENT_DEFINITIONS: Record<AgentType, AgentConfig> =
+  Object.fromEntries(
+    SOURCES.map((source) => [source.agentType, buildConfig(source)]),
+  ) as Record<AgentType, AgentConfig>;
 
 /** Node type each definition was extracted from (the §5B mapping). */
 export const AGENT_NODE_TYPES: Record<AgentType, NodeType> = Object.fromEntries(

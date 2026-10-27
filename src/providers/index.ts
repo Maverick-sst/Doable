@@ -7,6 +7,7 @@ import type {
   ChatResult,
   EmbeddingRequest,
   ModelProvider,
+  NormalizedToolCall,
   ProviderCapabilities,
   ToolDefinition,
 } from "./types";
@@ -16,6 +17,7 @@ export type {
   ChatResult,
   EmbeddingRequest,
   ModelProvider,
+  NormalizedToolCall,
   ProviderCapabilities,
   ToolDefinition,
 };

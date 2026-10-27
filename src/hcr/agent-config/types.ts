@@ -1,4 +1,4 @@
-import type { NodeType } from "@prisma/client";
+import type { ArtifactType, NodeType } from "@prisma/client";
 
 /**
  * Explicit cognitive-role identifiers for the six Doable agents (§5A catalog).
@@ -59,9 +59,26 @@ export interface ExperimentReference {
   variant: string;
 }
 
+/** Identity of the versioned prompt backing `instructions`. */
+export interface PromptReference {
+  id: string;
+  version: string;
+  hash: string;
+}
+
+/**
+ * What the agent produces: an artifact schema for structured-output agents,
+ * or workspace files through tools. The workflow still decides when to create
+ * the artifact; this contract only declares its shape.
+ */
+export interface OutputContract {
+  artifactType: ArtifactType | null;
+  mode: "structured_json" | "tool_calls";
+}
+
 /**
  * Stable agent description. Owns identity/role, instructions, capabilities,
- * and policy references — never execution identity (`executionId`,
+ * policies, and the output contract — never execution identity (`executionId`,
  * `workflowId`, `nodeId`, run IDs), never dynamic context (prompt, history,
  * artifacts, memory, tool results). See §4 of the brief.
  */
@@ -69,12 +86,14 @@ export interface AgentConfig {
   agentId: string;
   agentType: AgentType;
   instructions: string;
+  prompt: PromptReference;
   capabilities: AgentCapability[];
   toolPolicy: ToolPolicyReference;
   modelPolicy: ModelPolicyReference;
   executionPolicy: ExecutionPolicyReference;
+  outputContract: OutputContract;
   experiment?: ExperimentReference;
-  version?: string;
+  version: string;
 }
 
 /** Input accepted by the configuration provider (§12 runtime contract). */

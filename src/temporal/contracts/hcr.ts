@@ -108,7 +108,7 @@ export interface ArchitectNodeActivityResult {
  */
 export function isHcrDomainFailure(message: string): boolean {
   return (
-    message.includes("Failed to parse/validate JSON") ||
+    message.includes("Failed to parse/validate") ||
     message.includes("without mark_complete") ||
     message.includes("not found") ||
     message.includes("does not belong")

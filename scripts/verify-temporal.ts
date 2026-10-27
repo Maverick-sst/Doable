@@ -144,6 +144,17 @@ async function main() {
     assert(nodeTypes.includes(expected), `node ${expected} exists`);
   }
 
+  for (const node of execution.nodes) {
+    assert(
+      node.agentConfigVersion !== null,
+      `node ${node.type} records its agent config version`,
+    );
+    assert(
+      node.agentConfigHash?.startsWith("sha256:") ?? false,
+      `node ${node.type} records its agent config hash`,
+    );
+  }
+
   const artifactTypes = execution.artifacts.map((artifact) => artifact.type);
   for (const expected of [
     ArtifactType.ARCHITECTURE_SPEC,

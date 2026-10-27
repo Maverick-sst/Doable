@@ -1,109 +1,109 @@
-import { NodeType, ArtifactType } from "@prisma/client";
-import { NodeConfig } from "./types/node-config";
-import { resolveNodeBudget } from "@/src/runtime/budgets";
+import { ArtifactType, NodeType } from "@prisma/client";
 import {
-  ARCHITECT_SYSTEM_PROMPT,
-  RESEARCHER_SYSTEM_PROMPT,
-  PRD_REVIEWER_SYSTEM_PROMPT,
-  STAFF_ENGINEER_SYSTEM_PROMPT,
-  FRONTEND_ENGINEER_SYSTEM_PROMPT,
-  BACKEND_ENGINEER_SYSTEM_PROMPT,
-} from "./prompts";
+  AGENT_DEFINITIONS,
+  agentTypeForNode,
+} from "@/src/hcr/agent-config";
+import type { ContextConfig, NodeConfig } from "./types/node-config";
 
-export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> = {
-  [NodeType.ARCHITECT]: {
+/**
+ * HCR's node-level *context* contract: which artifacts the Context Engine may
+ * inject and whether it may add the file tree, vector hits, or message
+ * history. It is deliberately separate from `AgentConfig`: agent
+ * configuration owns identity, instructions and policy; context ownership
+ * stays with the Context Engine (d-3 Agent 01 §5C).
+ */
+interface NodeContextContract {
+  nodeType: NodeType;
+  context: ContextConfig;
+}
+
+const CONTEXT_CONTRACTS: NodeContextContract[] = [
+  {
     nodeType: NodeType.ARCHITECT,
-    outputArtifactType: ArtifactType.ARCHITECTURE_SPEC,
-    consumedArtifactTypes: [ArtifactType.DISCOVERY_REQUIREMENT],
-    systemPrompt: ARCHITECT_SYSTEM_PROMPT,
-    contextConfig: {
+    context: {
       consumedArtifactTypes: [ArtifactType.DISCOVERY_REQUIREMENT],
       includeFileTree: false,
       includeVectorSearch: false,
       includeMessageHistory: false,
     },
-    usesFileTools: false,
-    maxIterations: resolveNodeBudget("structured_json").maxIterations,
-    outputMode: "structured_json",
   },
-
-  [NodeType.RESEARCH]: {
+  {
     nodeType: NodeType.RESEARCH,
-    outputArtifactType: ArtifactType.RESEARCH_DOSSIER,
-    consumedArtifactTypes: [ArtifactType.ARCHITECTURE_SPEC],
-    systemPrompt: RESEARCHER_SYSTEM_PROMPT,
-    contextConfig: {
+    context: {
       consumedArtifactTypes: [ArtifactType.ARCHITECTURE_SPEC],
       includeFileTree: false,
       includeVectorSearch: false,
       includeMessageHistory: false,
     },
-    usesFileTools: false,
-    maxIterations: resolveNodeBudget("structured_json").maxIterations,
-    outputMode: "structured_json",
   },
-
-  [NodeType.PRD_REVIEWER]: {
+  {
     nodeType: NodeType.PRD_REVIEWER,
-    outputArtifactType: ArtifactType.APPROVED_PRD,
-    consumedArtifactTypes: [ArtifactType.RESEARCH_DOSSIER],
-    systemPrompt: PRD_REVIEWER_SYSTEM_PROMPT,
-    contextConfig: {
+    context: {
       consumedArtifactTypes: [ArtifactType.RESEARCH_DOSSIER],
       includeFileTree: false,
       includeVectorSearch: false,
       includeMessageHistory: false,
     },
-    usesFileTools: false,
-    maxIterations: resolveNodeBudget("structured_json").maxIterations,
-    outputMode: "structured_json",
   },
-
-  [NodeType.PLANNER]: {
+  {
     nodeType: NodeType.PLANNER,
-    outputArtifactType: ArtifactType.EXECUTION_PLAN,
-    consumedArtifactTypes: [ArtifactType.APPROVED_PRD],
-    systemPrompt: STAFF_ENGINEER_SYSTEM_PROMPT,
-    contextConfig: {
+    context: {
       consumedArtifactTypes: [ArtifactType.APPROVED_PRD],
       includeFileTree: false,
       includeVectorSearch: false,
       includeMessageHistory: false,
     },
-    usesFileTools: false,
-    maxIterations: resolveNodeBudget("structured_json").maxIterations,
-    outputMode: "structured_json",
   },
-
-  [NodeType.FRONTEND_ENG]: {
+  {
     nodeType: NodeType.FRONTEND_ENG,
-    outputArtifactType: null,
-    consumedArtifactTypes: [ArtifactType.EXECUTION_PLAN],
-    systemPrompt: FRONTEND_ENGINEER_SYSTEM_PROMPT,
-    contextConfig: {
+    context: {
       consumedArtifactTypes: [ArtifactType.EXECUTION_PLAN],
       includeFileTree: true,
       includeVectorSearch: true,
       includeMessageHistory: false,
     },
-    usesFileTools: true,
-    maxIterations: resolveNodeBudget("tool_calls").maxIterations,
-    outputMode: "tool_calls",
   },
-
-  [NodeType.BACKEND_ENG]: {
+  {
     nodeType: NodeType.BACKEND_ENG,
-    outputArtifactType: null,
-    consumedArtifactTypes: [ArtifactType.EXECUTION_PLAN],
-    systemPrompt: BACKEND_ENGINEER_SYSTEM_PROMPT,
-    contextConfig: {
+    context: {
       consumedArtifactTypes: [ArtifactType.EXECUTION_PLAN],
       includeFileTree: true,
       includeVectorSearch: true,
       includeMessageHistory: false,
     },
-    usesFileTools: true,
-    maxIterations: resolveNodeBudget("tool_calls").maxIterations,
-    outputMode: "tool_calls",
   },
-};
+];
+
+function buildNodeConfig({
+  nodeType,
+  context,
+}: NodeContextContract): NodeConfig {
+  const agent = AGENT_DEFINITIONS[agentTypeForNode(nodeType)];
+  return {
+    nodeType,
+    outputArtifactType: agent.outputContract.artifactType,
+    consumedArtifactTypes: [...context.consumedArtifactTypes],
+    systemPrompt: agent.instructions,
+    contextConfig: {
+      ...context,
+      consumedArtifactTypes: [...context.consumedArtifactTypes],
+    },
+    usesFileTools: agent.toolPolicy.eligibleTools.length > 0,
+    maxIterations: agent.executionPolicy.maxIterations,
+    outputMode: agent.outputContract.mode,
+  };
+}
+
+/**
+ * Workflow-facing view of the catalog. This registry is *derived*, not a
+ * source of truth: instructions and execution policy come from
+ * `AGENT_DEFINITIONS`, so the two surfaces cannot drift. Kept as a named
+ * export because the Temporal activity and resume path consume `NodeConfig`.
+ */
+export const AGENT_REGISTRY: Partial<Record<NodeType, NodeConfig>> =
+  Object.fromEntries(
+    CONTEXT_CONTRACTS.map((contract) => [
+      contract.nodeType,
+      buildNodeConfig(contract),
+    ]),
+  ) as Partial<Record<NodeType, NodeConfig>>;
